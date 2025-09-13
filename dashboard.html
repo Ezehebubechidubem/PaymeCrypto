@@ -1,1 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Payme Crypto — Dashboard</title>
 
+  <!-- ethers v6 UMD (used for on-chain fallback) -->
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.6.0/dist/ethers.umd.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    h1 { margin: 10px 0 20px; font-size: 26px; color: #00ffae; }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 20px;
+      width: 100%;
+      max-width: 500px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      margin-bottom: 20px;
+    }
+    .wallet-info { text-align: center; margin-bottom: 15px; }
+    .wallet-address {
+      font-family: monospace;
+      background: rgba(0,0,0,0.3);
+      padding: 8px;
+      border-radius: 10px;
+      word-break: break-all;
+      margin: 8px 0;
+    }
+    .network-toggle { display: flex; justify-content: center; gap: 12px; margin: 10px 0; }
+    .network-toggle button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      background: #1b3a4b;
+      color: #fff;
+    }
+    .network-toggle .active { background: #00ffae; color: #00221a; }
+    .balance { font-size: 24px; font-weight: bold; margin: 15px 0; color: #00ffae; }
+
+    /* ACTIONS: always horizontal (desktop & mobile) */
+    .actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin: 15px 0;
+      flex-direction: row; /* horizontal */
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 2px;
+    }
+    .actions button {
+      flex: 1;
+      min-width: 80px;
+      padding: 12px 16px;
+      font-size: 16px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+    .send { background: #ff6b6b; color: #fff; }
+    .receive { background: #32cd32; color: #fff; }
+    .buy { background: #1e90ff; color: #fff; }
+    .sell { background: #ffa500; color: #fff; }
+
+    .token-list { margin-top: 15px; }
+    .token-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.06);
+      margin-bottom: 10px;
+      transition: background .12s;
+    }
+
+    /* Left column: symbol + name (symbol top, name below) */
+    .token-item > div:first-child {
+      display:flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap:6px;
+    }
+    .symbol {
+      font-weight: bold;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      font-size:15px;
+    }
+
+    /* Right column: amount top, price below */
+    .token-item > div:last-child {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+    .token-amount { font-weight:800; }
+    .price { color: #00ffae; font-weight: bold; display:inline-block; }
+
+    /* percent change */
+    .pct { margin-left:8px; font-weight:700; font-size:13px; }
+    .pct.up { color: #00ffae; }
+    .pct.down { color: #ff6b6b; }
+
+    .token-img { width:28px; height:28px; border-radius:50%; object-fit:cover; display:inline-block; vertical-align:middle; }
+
+    .payme-badge {
+      width:28px;height:28px;border-radius:50%;background:#1e90ff;color:#fff;display:inline-flex;
+      align-items:center;justify-content:center;font-weight:800;font-size:12px;margin-right:8px;
+    }
+
+    .add-token-btn {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: #1e90ff;
+      color: #fff;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 700;
+      border: none;
+      text-align: center;
+    }
+
+    .muted { color: rgba(255,255,255,0.65); font-size:13px; }
+
+    @media (max-width:420px){
+      .token-item { flex-wrap: nowrap; }
+      .actions { gap:8px; }
+      .actions button { padding:10px 12px; min-width:70px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Payme Crypto</h1>
+
+  <div class="card">
+    <div class="wallet-info">
+      <div>Wallet Address</div>
+      <div id="walletAddr" class="wallet-address">0x1234...abcd</div>
+    </div>
+
+    <div class="network-toggle">
+      <button id="mainBtn" class="active" onclick="switchNetwork('mainnet')">Mainnet</button>
+      <button id="testBtn" onclick="switchNetwork('testnet')">Testnet</button>
+    </div>
+
+    <div id="balance" class="balance">$0.00 (Mainnet)</div>
+
+    <div class="actions">
+      <button class="send">Send</button>
+      <button class="receive" onclick="window.location.href='receive.html'">Receive</button>
+      <button class="buy">Buy</button>
+      <button class="sell">Sell</button>
+    </div>
+  </div>
+
+  <div id="tokens" class="card token-list">
+    <button class="add-token-btn" onclick="onAddTokenClicked()">+ Add Token (CoinGecko)</button>
+    <div id="addTokenStatus" style="margin-top:8px;"></div>
+    <!-- token rows will be appended below the button -->
+  </div>
+
+  <script>
+    /********************************************************
+     * Config / storage keys
+     ********************************************************/
+    const API_BASE = ""; // empty -> same origin. Change to backend URL if needed.
+    const STORAGE_WALLET = "payme_wallet";
+    const STORAGE_TOKENS = "payme_tokens";
+
+    // Wallet address (from localStorage payme_wallet)
+    const walletObj = JSON.parse(localStorage.getItem(STORAGE_WALLET) || "{}");
+    const walletAddress = walletObj && walletObj.address ? walletObj.address : null;
+    if(walletAddress) document.getElementById("walletAddr").innerText = walletAddress;
+
+    // default mainnet tokens (CoinGecko ids)
+    const DEFAULT_MAINNET_IDS = ["ethereum", "binancecoin"];
+
+    // minimal ERC20 ABI for ethers fallback
+    const ERC20_ABI = [
+      "function balanceOf(address) view returns (uint256)",
+      "function decimals() view returns (uint8)"
+    ];
+
+    // PROVIDERS (ethers) - used only as fallback when backend balance API is not available
+    const PROVIDERS = {
+      eth: new ethers.JsonRpcProvider("https://cloudflare-eth.com"),
+      bsc: new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/"),
+      polygon: new ethers.JsonRpcProvider("https://rpc.ankr.com/polygon"),
+      avax: new ethers.JsonRpcProvider("https://rpc.ankr.com/avalanche"),
+      arbitrum: new ethers.JsonRpcProvider("https://rpc.ankr.com/arbitrum"),
+      optimism: new ethers.JsonRpcProvider("https://rpc.ankr.com/optimism"),
+      fantom: new ethers.JsonRpcProvider("https://rpc.ankr.com/fantom"),
+      cronos: new ethers.JsonRpcProvider("https://rpc.vvs.finance"),
+      // add more providers if you like (these mirror backend defaults)
+    };
+
+    // Map CoinGecko native ID -> provider key
+    const NATIVE_ID_TO_PROVIDER_KEY = {
+      "ethereum": "eth",
+      "binancecoin": "bsc",
+      "polygon": "polygon",
+      "avalanche-2": "avax",
+      "avalanche": "avax",
+      "arbitrum": "arbitrum",
+      "optimism": "optimism",
+      "fantom": "fantom"
+    };
+
+    // tokenRows keeps DOM refs + meta for each token key (id or symbol for testnet)
+    const tokenRows = {}; // tokenRows[id] = { node, meta }
+
+    /********************************************************
+     * Storage helpers
+     ********************************************************/
+    function readStoredTokens(){
+      try { return JSON.parse(localStorage.getItem(STORAGE_TOKENS) || "{}"); }
+      catch(e){ return {}; }
+    }
+    function writeStoredTokens(obj){
+      localStorage.setItem(STORAGE_TOKENS, JSON.stringify(obj));
+    }
+
+    function fmt(n){
+      if(typeof n !== 'number') n = Number(n || 0);
+      return n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:8});
+    }
+
+    /********************************************************
+     * DOM: create or update a token row without removing it
+     ********************************************************/
+    function createOrUpdateRow(id, meta){
+      // id: coin id (mainnet) or token symbol (testnet PYM)
+      // meta: { symbol, name, image, priceStr, price, pct, balance, isPayme }
+      const container = document.getElementById("tokens");
+
+      // keep rows appended below the Add button and status (we appended Add button first in DOM)
+      // We will append after the status div (which is index 2 child)
+      const afterEl = document.getElementById("addTokenStatus");
+
+      // if already exists, update in-place
+      if(tokenRows[id] && tokenRows[id].node){
+        const node = tokenRows[id].node;
+        // update symbol area
+        const symEl = node.querySelector(".symbol");
+        symEl.innerHTML = "";
+        if(meta.image){
+          const img = document.createElement("img");
+          img.className = "token-img";
+          img.src = meta.image;
+          img.alt = meta.symbol || id;
+          symEl.appendChild(img);
+        } else if(meta.isPayme){
+          const sp = document.createElement("span");
+          sp.className = "payme-badge";
+          sp.innerText = "PY";
+          symEl.appendChild(sp);
+        }
+        const textSymbol = document.createTextNode((meta.symbol || id).toUpperCase());
+        symEl.appendChild(textSymbol);
+
+        // update name
+        const nameEl = node.querySelector(".muted");
+        nameEl.innerText = meta.name || "";
+
+        // update balance & price
+        const amtEl = node.querySelector(".token-amount");
+        amtEl.innerText = `${fmt(Number(meta.balance || 0))} ${ (meta.symbol || id).toUpperCase() }`;
+
+        const priceEl = node.querySelector(".price-value");
+        priceEl.innerText = `$${fmt(Number(meta.price || 0))}`;
+
+        // percent
+        const pctEl = node.querySelector(".pct");
+        const pct = Number(meta.pct || 0);
+        if(isFinite(pct)){
+          const sign = (pct >= 0) ? "+" : "";
+          pctEl.innerText = `${sign}${Number(pct).toFixed(2)}%`;
+          if(pct >= 0) { pctEl.classList.remove("down"); pctEl.classList.add("up"); }
+          else { pctEl.classList.remove("up"); pctEl.classList.add("down"); }
+        } else {
+          pctEl.innerText = "";
+          pctEl.classList.remove("up","down");
+        }
+
+        // update stored meta snapshot too
+        tokenRows[id].meta = Object.assign({}, tokenRows[id].meta || {}, meta);
+        return;
+      }
+
+      // create new row
+      const row = document.createElement("div");
+      row.className = "token-item";
+      row.dataset.tokenId = id;
+
+      // build left (symbol + name)
+      const left = document.createElement("div");
+      const symbolRow = document.createElement("div");
+      symbolRow.className = "symbol";
+
+      if(meta.image){
+        const img = document.createElement("img");
+        img.className = "token-img";
+        img.src = meta.image;
+        img.alt = meta.symbol || id;
+        symbolRow.appendChild(img);
+      } else if(meta.isPayme){
+        const sp = document.createElement("span");
+        sp.className = "payme-badge";
+        sp.innerText = "PY";
+        symbolRow.appendChild(sp);
+      }
+
+      const txt = document.createTextNode((meta.symbol || id).toUpperCase());
+      symbolRow.appendChild(txt);
+
+      const nameRow = document.createElement("div");
+      nameRow.className = "muted";
+      nameRow.style.fontSize = "13px";
+      nameRow.innerText = meta.name || "";
+
+      left.appendChild(symbolRow);
+      left.appendChild(nameRow);
+
+      // build right (amount + price + pct)
+      const right = document.createElement("div");
+      const amt = document.createElement("div");
+      amt.className = "token-amount";
+      amt.innerText = `${fmt(Number(meta.balance || 0))} ${ (meta.symbol || id).toUpperCase() }`;
+
+      const priceRow = document.createElement("div");
+      priceRow.className = "price";
+      const priceVal = document.createElement("span");
+      priceVal.className = "price-value";
+      priceVal.innerText = `$${fmt(Number(meta.price || 0))}`;
+
+      const pctSpan = document.createElement("span");
+      pctSpan.className = "pct";
+      const p = Number(meta.pct || 0);
+      if(isFinite(p)){
+        const sign = (p >= 0) ? "+" : "";
+        pctSpan.innerText = `${sign}${p.toFixed(2)}%`;
+        pctSpan.classList.add(p >= 0 ? "up" : "down");
+      }
+
+      priceRow.appendChild(priceVal);
+      priceRow.appendChild(pctSpan);
+
+      right.appendChild(amt);
+      right.appendChild(priceRow);
+
+      // node assembly
+      row.appendChild(left);
+      row.appendChild(right);
+
+      // append after status element (so rows show below button & status)
+      if(afterEl && afterEl.parentNode){
+        afterEl.parentNode.insertBefore(row, afterEl.nextSibling);
+      } else {
+        container.appendChild(row);
+      }
+
+      tokenRows[id] = { node: row, meta: Object.assign({}, meta) };
+    }
+
+    /********************************************************
+     * Helpers used by update functions (CoinGecko/Backend helpers)
+     ********************************************************/
+    // tries backend markets first, falls back to CoinGecko direct
+    async function fetchMarkets(ids){
+      if(!ids || ids.length === 0) return [];
+      // try backend
+      try {
+        const res = await fetch(`${API_BASE}/api/coins/markets?ids=${encodeURIComponent(ids.join(","))}`);
+        if(res.ok){
+          const data = await res.json();
+          return Array.isArray(data) ? data : [];
+        }
+      } catch(err){
+        // ignore and fallback
+      }
+      // fallback direct
+      try {
+        const res2 = await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + encodeURIComponent(ids.join(",")) + "&price_change_percentage=24h");
+        if(res2.ok){
+          const data2 = await res2.json();
+          return Array.isArray(data2) ? data2 : [];
+        }
+      } catch(e){
+        console.warn("markets fetch failed", e);
+      }
+      return [];
+    }
+
+    // try backend coin detail -> returns object { platforms, ... } or null
+    async function cachedCoinDetail(coinId){
+      // Try backend coin detail via CoinGecko original API (backend doesn't expose coin detail endpoint currently)
+      try {
+        const r = await fetch(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(coinId)}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false`);
+        if(r.ok){
+          const j = await r.json();
+          return j;
+        }
+      } catch(e){
+        // ignore
+      }
+      return null;
+    }
+
+    // findContractForCoinId: attempts to get the first contract address + platform for given coinId
+    async function findContractForCoinId(coinId){
+      try {
+        const detail = await cachedCoinDetail(coinId);
+        if(!detail) return null;
+        const platforms = detail.platforms || {};
+        const order = ["ethereum","binance-smart-chain","polygon-pos","avalanche","arbitrum-one","optimistic-ethereum","fantom"];
+        for(const p of order){
+          const val = platforms[p];
+          if(val) return { contract: val, platform: p, platformKey: p };
+        }
+        for(const [p,val] of Object.entries(platforms)){
+          if(val) return { contract: val, platform: p, platformKey: p };
+        }
+      } catch(e){ /* ignore */ }
+      return null;
+    }
+
+    /********************************************************
+     * Provided logic (kept exactly, with backend integration)
+     * updatePricesAndDisplay(net)  -- uses getMainnetIds(stored)
+     ********************************************************/
+    function getMainnetIds(stored){
+      const storedMain = stored.mainnet ? Object.keys(stored.mainnet) : [];
+      const idsSet = new Set([...DEFAULT_MAINNET_IDS, ...storedMain]);
+      return Array.from(idsSet);
+    }
+
+    async function updatePricesAndDisplay(net){
+      const stored = readStoredTokens();
+
+      if(net === 'mainnet'){
+        const ids = getMainnetIds(stored);
+        // if no ids but tokenRows already present, compute total from tokenRows
+        if(ids.length === 0){
+          let totalFallback = 0;
+          for(const k of Object.keys(tokenRows)){
+            const meta = tokenRows[k].meta || {};
+            totalFallback += (Number(meta.balance || 0) * Number(meta.price || 0));
+          }
+          if(totalFallback > 0 && totalFallback < 0.01) document.getElementById("balance").innerText = `<$0.01 (Mainnet)`;
+          else document.getElementById("balance").innerText = `$${fmt(totalFallback)} (Mainnet)`;
+          return;
+        }
+
+        // fetch market data (try backend first, then CoinGecko)
+        let markets = [];
+        try {
+          markets = await fetchMarkets(ids);
+        } catch(err){
+          console.warn("markets fetch failed", err);
+          markets = [];
+        }
+        const marketMap = {};
+        (markets || []).forEach(m => marketMap[m.id] = m);
+
+        let totalUsd = 0;
+
+        for(const id of ids){
+          const m = marketMap[id];
+          const existing = tokenRows[id];
+          const prevMeta = existing ? existing.meta : (stored.mainnet && stored.mainnet[id] ? stored.mainnet[id] : {});
+
+          const symbol = m ? (m.symbol || id).toUpperCase() : (prevMeta.symbol ? prevMeta.symbol : id.toUpperCase());
+          const name = m ? (m.name || id) : (prevMeta.name ? prevMeta.name : id);
+          const price = m ? Number(m.current_price || 0) : (prevMeta.price ? Number(prevMeta.price) : 0);
+          const pct = m && typeof m.price_change_percentage_24h === 'number' ? Number(m.price_change_percentage_24h) : (prevMeta.pct ? Number(prevMeta.pct) : 0);
+          const image = m && m.image ? m.image : (prevMeta.image || null);
+
+          // prefer on-chain/stored balance if present; if none, keep previous meta balance (don't wipe)
+          let bal = 0;
+          if(stored.mainnet && stored.mainnet[id] && typeof stored.mainnet[id].balance !== 'undefined'){
+            bal = Number(stored.mainnet[id].balance || 0);
+          } else if(prevMeta && typeof prevMeta.balance !== 'undefined'){
+            bal = Number(prevMeta.balance || 0);
+          } else {
+            bal = 0;
+          }
+
+          const meta = {
+            symbol,
+            name,
+            image,
+            priceStr: price ? fmt(price) : (prevMeta.priceStr || "0.00"),
+            price,
+            pct: pct || 0,
+            balance: bal,
+            isPayme:false
+          };
+
+          createOrUpdateRow(id, meta);
+          totalUsd += bal * price;
+        }
+
+        if(totalUsd > 0 && totalUsd < 0.01) document.getElementById("balance").innerText = `<$0.01 (Mainnet)`;
+        else document.getElementById("balance").innerText = `$${fmt(totalUsd)} (Mainnet)`;
+
+      } else {
+        const t = stored.testnet || {};
+        const keys = Object.keys(t);
+        if(keys.length === 0){
+          // compute fallback total from tokenRows testnet entries if present
+          let fallback = 0;
+          for(const k of Object.keys(tokenRows)){
+            if(k === 'PYM' || (t && t[k])) {
+              const meta = tokenRows[k] && tokenRows[k].meta ? tokenRows[k].meta : null;
+              if(meta) fallback += (Number(meta.balance||0) * Number(meta.price||0));
+            }
+          }
+          if(fallback > 0 && fallback < 0.01) document.getElementById("balance").innerText = `<$0.01 (Testnet)`;
+          else document.getElementById("balance").innerText = `$${fmt(fallback)} (Testnet)`;
+          return;
+        }
+
+        let total = 0;
+        for(const k of keys){
+          const item = t[k];
+          const balStored = Number(item.balance || 0);
+          const prevMeta = tokenRows[k] ? token
