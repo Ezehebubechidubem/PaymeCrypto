@@ -1,0 +1,493 @@
+"""
+Flask backend for Payme Crypto frontend.
+
+Provides:
+- /api/coins/markets?ids=...
+- /api/coins/search?q=...
+- /api/balance  (POST)
+
+Install:
+  pip install -r requirements.txt
+Run:
+  python app.py
+
+Notes:
+- Configure RPC endpoints in RPC_URLS dictionary (replace public RPCs with Alchemy/Infura for production).
+- Optional Solana support: `pip install solana` (app will use it if available).
+"""
+import os
+import time
+import json
+import logging
+from functools import lru_cache
+from typing import Dict, Any, List, Optional
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import requests
+from web3 import Web3, HTTPProvider
+from web3.exceptions import BadFunctionCallOutput, ContractLogicError
+
+# Optional solana support (will be used only if installed)
+try:
+    from solana.rpc.api import Client as SolanaClient
+    from solana.publickey import PublicKey
+    SOLANA_AVAILABLE = True
+except Exception:
+    SOLANA_AVAILABLE = False
+
+app = Flask(__name__)
+CORS(app)
+
+logging.basicConfig(level=logging.INFO)
+
+# -------------------------
+# Config
+# -------------------------
+COINGECKO_API = "https://api.coingecko.com/api/v3"
+
+# RPC endpoints: replace with your own Alchemy/Infura endpoints for production
+RPC_URLS = {
+    "ethereum": os.environ.get("RPC_ETH", "https://cloudflare-eth.com"),
+    "bsc": os.environ.get("RPC_BSC", "https://bsc-dataseed.binance.org/"),
+    "polygon": os.environ.get("RPC_POLYGON", "https://rpc.ankr.com/polygon"),
+    "avax": os.environ.get("RPC_AVAX", "https://rpc.ankr.com/avalanche"),
+    "arbitrum": os.environ.get("RPC_ARBI", "https://rpc.ankr.com/arbitrum"),
+    "optimism": os.environ.get("RPC_OPT", "https://rpc.ankr.com/optimism"),
+    "fantom": os.environ.get("RPC_FANTOM", "https://rpc.ankr.com/fantom"),
+    "cronos": os.environ.get("RPC_CRONOS", "https://rpc.vvs.finance"),
+    # add more EVM-compatible chains as needed
+    # Solana uses a different SDK (optional)
+    "solana": os.environ.get("RPC_SOLANA", "https://api.mainnet-beta.solana.com"),
+}
+
+# minimal ERC20 ABI
+ERC20_ABI = [
+    {
+        "constant": True,
+        "inputs": [{"name": "_owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function",
+    },
+]
+
+# map coinGecko platform key -> our RPC key
+PLATFORM_TO_CHAIN_KEY = {
+    "ethereum": "ethereum",
+    "binance-smart-chain": "bsc",
+    "polygon-pos": "polygon",
+    "avalanche": "avax",
+    "arbitrum-one": "arbitrum",
+    "optimistic-ethereum": "optimism",
+    "fantom": "fantom",
+    # add more if desired
+    "solana": "solana",
+}
+
+# native coin coinGecko id -> chain key (some common ones)
+NATIVE_COIN_TO_CHAIN = {
+    "ethereum": "ethereum",
+    "binancecoin": "bsc",
+    "polygon": "polygon",
+    "avalanche-2": "avax",
+    "arbitrum": "arbitrum",
+    "optimism": "optimism",
+    "fantom": "fantom",
+    "solana": "solana",
+    # extend as needed
+}
+
+# small in-memory caches
+_MARKETS_CACHE: Dict[str, Any] = {}       # key -> (timestamp, data)
+_COIN_DETAIL_CACHE: Dict[str, Any] = {}   # coinId -> (timestamp, data)
+_CACHE_TTL = 12  # seconds for markets, short because frontend refreshes fast
+
+# create Web3 providers lazily and reuse
+_WEB3_PROVIDERS: Dict[str, Web3] = {}
+
+
+def get_web3(chain_key: str) -> Optional[Web3]:
+    if chain_key not in RPC_URLS:
+        return None
+    if chain_key in _WEB3_PROVIDERS:
+        return _WEB3_PROVIDERS[chain_key]
+    try:
+        provider = HTTPProvider(RPC_URLS[chain_key], request_kwargs={"timeout": 20})
+        w3 = Web3(provider)
+        _WEB3_PROVIDERS[chain_key] = w3
+        return w3
+    except Exception as e:
+        app.logger.warning("Failed to create Web3 for %s: %s", chain_key, e)
+        return None
+
+
+# -------------------------
+# CoinGecko helpers
+# -------------------------
+def cached_markets(ids: List[str]) -> List[dict]:
+    """
+    Return CoinGecko markets data for ids. Use short cache to reduce repeated hits.
+    """
+    if not ids:
+        return []
+    key = ",".join(sorted(ids))
+    now = time.time()
+    entry = _MARKETS_CACHE.get(key)
+    if entry and now - entry["ts"] < _CACHE_TTL:
+        return entry["data"]
+    # fetch
+    try:
+        params = {
+            "vs_currency": "usd",
+            "ids": key,
+            "order": "market_cap_desc",
+            "per_page": len(ids),
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "24h",
+        }
+        r = requests.get(f"{COINGECKO_API}/coins/markets", params=params, timeout=12)
+        r.raise_for_status()
+        data = r.json()
+        _MARKETS_CACHE[key] = {"ts": now, "data": data}
+        return data
+    except Exception as e:
+        app.logger.warning("CoinGecko markets fetch failed for %s: %s", key, e)
+        return []
+
+
+def cached_coin_detail(coin_id: str) -> Optional[dict]:
+    """Get coin detail (platforms, contract addresses) cached for longer."""
+    now = time.time()
+    entry = _COIN_DETAIL_CACHE.get(coin_id)
+    if entry and now - entry["ts"] < 60:
+        return entry["data"]
+    try:
+        r = requests.get(
+            f"{COINGECKO_API}/coins/{coin_id}",
+            params={"localization": "false", "tickers": "false", "market_data": "false",
+                    "community_data": "false", "developer_data": "false", "sparkline": "false"},
+            timeout=12
+        )
+        r.raise_for_status()
+        data = r.json()
+        _COIN_DETAIL_CACHE[coin_id] = {"ts": now, "data": data}
+        return data
+    except Exception as e:
+        app.logger.warning("CoinGecko coin detail failed for %s: %s", coin_id, e)
+        return None
+
+
+def find_contract_for_coin_id(coin_id: str) -> Optional[Dict[str, str]]:
+    """
+    For a given CoinGecko coin id, try to extract a contract address + platform.
+    Returns {"contract": addr, "platform": platform_key} or None.
+    Preference order: ethereum, binance-smart-chain, polygon-pos, avalanche, arbitrum-one, optimistic-ethereum.
+    """
+    detail = cached_coin_detail(coin_id)
+    if not detail:
+        return None
+    platforms = detail.get("platforms") or {}
+    prefer = ["ethereum", "binance-smart-chain", "polygon-pos", "avalanche", "arbitrum-one", "optimistic-ethereum"]
+    for p in prefer:
+        val = platforms.get(p)
+        if val:
+            return {"contract": val, "platform": p}
+    # fallback: any non-empty
+    for p, val in platforms.items():
+        if val:
+            return {"contract": val, "platform": p}
+    return None
+
+
+# -------------------------
+# Balance helpers
+# -------------------------
+def get_native_evm_balance(chain_key: str, address: str) -> Optional[float]:
+    w3 = get_web3(chain_key)
+    if w3 is None:
+        return None
+    try:
+        checksum = Web3.toChecksumAddress(address)
+        bal_wei = w3.eth.get_balance(checksum)
+        return float(w3.fromWei(bal_wei, "ether"))
+    except Exception as e:
+        app.logger.warning("native balance error for %s @ %s: %s", chain_key, address, e)
+        return None
+
+
+def get_erc20_balance(chain_key: str, contract_address: str, address: str) -> Optional[float]:
+    w3 = get_web3(chain_key)
+    if w3 is None:
+        return None
+    try:
+        checksum_token = Web3.toChecksumAddress(contract_address)
+        checksum_addr = Web3.toChecksumAddress(address)
+        token = w3.eth.contract(address=checksum_token, abi=ERC20_ABI)
+        # decimals may fail for some tokens — guard it
+        try:
+            decimals = token.functions.decimals().call()
+        except Exception:
+            decimals = 18
+        raw = token.functions.balanceOf(checksum_addr).call()
+        return float(raw) / (10 ** decimals)
+    except (BadFunctionCallOutput, ContractLogicError) as e:
+        app.logger.warning("erc20 contract call failed: %s", e)
+        return None
+    except Exception as e:
+        app.logger.warning("erc20 balance error for %s on %s: %s", contract_address, chain_key, e)
+        return None
+
+
+def get_solana_balance(address: str) -> Optional[float]:
+    if not SOLANA_AVAILABLE:
+        return None
+    try:
+        client = SolanaClient(RPC_URLS.get("solana") or "https://api.mainnet-beta.solana.com")
+        pk = PublicKey(address)
+        resp = client.get_balance(pk)
+        if resp.get("result") and resp["result"].get("value") is not None:
+            lamports = resp["result"]["value"]
+            return lamports / 1e9  # SOL has 1e9 lamports
+    except Exception as e:
+        app.logger.warning("Solana balance error for %s: %s", address, e)
+    return None
+
+
+# -------------------------
+# API endpoints
+# -------------------------
+@app.route("/api/coins/markets", methods=["GET"])
+def api_coins_markets():
+    ids = request.args.get("ids", "")
+    if not ids:
+        return jsonify({"error": "ids query param required"}), 400
+    ids_list = [i.strip() for i in ids.split(",") if i.strip()]
+    data = cached_markets(ids_list)
+    return jsonify(data)
+
+
+@app.route("/api/coins/search", methods=["GET"])
+def api_coins_search():
+    q = request.args.get("q") or request.args.get("query")
+    if not q:
+        return jsonify({"error": "q parameter required"}), 400
+    try:
+        r = requests.get(f"{COINGECKO_API}/search", params={"query": q}, timeout=10)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except Exception as e:
+        app.logger.exception("CoinGecko search failed")
+        return jsonify({"error": "search failed", "detail": str(e)}), 500
+
+
+@app.route("/api/balance", methods=["POST"])
+def api_balance():
+    """
+    POST body (JSON):
+    {
+      "chain": "ethereum" | "bsc" | "polygon" | ...  (preferred main chain for native display)
+      "address": "<wallet address>",
+      "coin_ids": ["ethereum", "uniswap", ...]   # optional: CoinGecko ids you want info for
+      "tokens": [ {"chain": "ethereum", "contract": "0x..."} ]  # optional explicit token contracts
+    }
+    Response: JSON with native balance (if available), tokens array (symbol,name,contract,chain,balance,price,price_change_24h,usd_value,logo)
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    chain = (payload.get("chain") or "").strip().lower()
+    address = (payload.get("address") or "").strip()
+    coin_ids = payload.get("coin_ids") or []   # coinGecko ids
+    tokens = payload.get("tokens") or []       # explicit token contracts list
+
+    if not chain or not address:
+        return jsonify({"error": "chain and address required"}), 400
+
+    result = {
+        "chain": chain,
+        "address": address,
+        "native": None,
+        "tokens": [],
+        "errors": []
+    }
+
+    # 1) Native balance (attempt EVM first then solana)
+    try:
+        if chain in RPC_URLS and chain != "solana":
+            native_bal = get_native_evm_balance(chain, address)
+            # try to obtain native coin id & price from coinGecko (map chain -> coingecko id)
+            # Basic mapping - you can extend
+            native_coin_id = None
+            for cid, ch in NATIVE_COIN_TO_CHAIN.items():
+                if ch == chain:
+                    native_coin_id = cid
+                    break
+            price = None
+            price_change = None
+            if native_coin_id:
+                markets = cached_markets([native_coin_id])
+                if markets:
+                    m = markets[0]
+                    price = float(m.get("current_price", 0) or 0)
+                    price_change = m.get("price_change_percentage_24h")
+            result["native"] = {
+                "symbol": native_coin_id.upper() if native_coin_id else chain.upper(),
+                "balance": native_bal if native_bal is not None else 0.0,
+                "usd_price": price,
+                "usd_value": (native_bal or 0) * (price or 0),
+                "price_change_24h": price_change
+            }
+        elif chain == "solana":
+            sol_bal = get_solana_balance(address)
+            # coin id for solana is 'solana'
+            price = None
+            m = cached_markets(["solana"])
+            if m:
+                price = float(m[0].get("current_price", 0) or 0)
+            result["native"] = {
+                "symbol": "SOL",
+                "balance": sol_bal if sol_bal is not None else 0.0,
+                "usd_price": price,
+                "usd_value": (sol_bal or 0) * (price or 0),
+                "price_change_24h": m[0].get("price_change_percentage_24h") if m else None
+            }
+        else:
+            result["native"] = {"symbol": chain.upper(), "balance": 0.0, "usd_price": None, "usd_value": 0.0}
+    except Exception as e:
+        app.logger.exception("native balance fetch failed")
+        result["errors"].append(f"native_balance_error: {str(e)}")
+
+    # 2) Prepare list of coin ids to fetch prices for (include coin_ids)
+    coin_ids = list(dict.fromkeys([str(cid).strip() for cid in (coin_ids or []) if cid]))
+    # Also build a quick lookup for markets
+    markets = {}
+    if coin_ids:
+        market_data = cached_markets(coin_ids)
+        for m in market_data:
+            if m.get("id"):
+                markets[m["id"]] = m
+
+    # 3) For coin_ids: try to derive contract + chain and fetch token balances (if EVM)
+    for coin_id in coin_ids:
+        if coin_id in NATIVE_COIN_TO_CHAIN and NATIVE_COIN_TO_CHAIN[coin_id] == chain:
+            # native already handled (skip)
+            continue
+        # try to find contract
+        found = find_contract_for_coin_id(coin_id)
+        if found and found.get("contract"):
+            platform = found.get("platform")
+            chain_key = PLATFORM_TO_CHAIN_KEY.get(platform)
+            contract_addr = found.get("contract")
+            balance = None
+            if chain_key and chain_key in RPC_URLS:
+                balance = get_erc20_balance(chain_key, contract_addr, address)
+            # get price html from markets if available
+            m = markets.get(coin_id) or {}
+            usd_price = float(m.get("current_price", 0) or 0)
+            price_chg = m.get("price_change_percentage_24h")
+            result["tokens"].append({
+                "coin_id": coin_id,
+                "symbol": (m.get("symbol") or "").upper() or coin_id.upper(),
+                "name": m.get("name") or coin_id,
+                "contract": contract_addr,
+                "platform": platform,
+                "chain": chain_key,
+                "balance": balance if balance is not None else 0.0,
+                "usd_price": usd_price,
+                "price_change_24h": price_chg,
+                "usd_value": (balance or 0.0) * (usd_price or 0.0),
+                "logo": m.get("image")
+            })
+        else:
+            # No contract resolved - return a placeholder with price if CoinGecko has it
+            m = markets.get(coin_id)
+            price = float(m.get("current_price", 0) or 0) if m else None
+            result["tokens"].append({
+                "coin_id": coin_id,
+                "symbol": (m.get("symbol") or coin_id).upper() if m else coin_id.upper(),
+                "name": m.get("name") or coin_id,
+                "contract": None,
+                "platform": None,
+                "chain": None,
+                "balance": 0.0,
+                "usd_price": price,
+                "price_change_24h": m.get("price_change_percentage_24h") if m else None,
+                "usd_value": 0.0,
+                "logo": m.get("image") if m else None
+            })
+
+    # 4) For explicit tokens (contracts) listed in payload.tokens
+    for t in tokens:
+        try:
+            tchain = t.get("chain") or chain
+            tcontract = t.get("contract")
+            if not tcontract:
+                continue
+            balance = get_erc20_balance(tchain, tcontract, address)
+            # attempt to get coinGecko price via contract endpoint: /coins/{platform}/contract/{contract_address}
+            usd_price = None
+            price_chg = None
+            logo = None
+            coin_name = None
+            coin_symbol = None
+            try:
+                platform_for_cg = None
+                # invert PLATFORM_TO_CHAIN_KEY to find platform name for tchain
+                for pf, ck in PLATFORM_TO_CHAIN_KEY.items():
+                    if ck == tchain:
+                        platform_for_cg = pf
+                        break
+                if platform_for_cg:
+                    r = requests.get(f"{COINGECKO_API}/coins/{platform_for_cg}/contract/{tcontract}", timeout=10)
+                    if r.ok:
+                        info = r.json()
+                        market = info.get("market_data") or {}
+                        usd_price = (market.get("current_price") or {}).get("usd")
+                        price_chg = market.get("price_change_percentage_24h")
+                        coin_name = info.get("name")
+                        coin_symbol = info.get("symbol")
+                        logo = (info.get("image") or {}).get("small")
+            except Exception:
+                # ignore coinGecko contract lookup failure
+                pass
+
+            result["tokens"].append({
+                "coin_id": None,
+                "symbol": (coin_symbol or t.get("symbol") or "").upper() or tcontract[:6],
+                "name": coin_name or t.get("name") or tcontract,
+                "contract": tcontract,
+                "platform": None,
+                "chain": tchain,
+                "balance": balance if balance is not None else 0.0,
+                "usd_price": float(usd_price) if usd_price else None,
+                "price_change_24h": price_chg,
+                "usd_value": (balance or 0.0) * (float(usd_price) if usd_price else 0.0),
+                "logo": logo
+            })
+        except Exception as e:
+            app.logger.exception("token entry failure")
+            result["errors"].append(f"token_error:{str(e)}")
+
+    # final: compute totals (native + tokens) in USD (if possible)
+    total_usd = 0.0
+    if result["native"] and result["native"].get("usd_value"):
+        total_usd += float(result["native"]["usd_value"] or 0.0)
+    for tk in result["tokens"]:
+        try:
+            total_usd += float(tk.get("usd_value") or 0.0)
+        except Exception:
+            pass
+    result["total_usd"] = total_usd
+
+    return jsonify(result)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
