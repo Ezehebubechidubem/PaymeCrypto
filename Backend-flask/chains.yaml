@@ -1,1 +1,18 @@
 
+ethereum:
+  rpc: "https://cloudflare-eth.com"
+bsc:
+  rpc: "https://bsc-dataseed.binance.org/"
+polygon:
+  rpc: "https://rpc.ankr.com/polygon"
+avax:
+  rpc: "https://rpc.ankr.com/avalanche"
+arbitrum:
+  rpc: "https://rpc.ankr.com/arbitrum"
+optimism:
+  rpc: "https://rpc.ankr.com/optimism"
+fantom:
+  rpc: "https://rpc.ankr.com/fantom"
+solana:
+  rpc: "https://api.mainnet-beta.solana.com"
+# add as many chains as you like: key -> { rpc: "..." }
