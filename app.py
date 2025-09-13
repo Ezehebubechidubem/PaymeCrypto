@@ -544,6 +544,93 @@ def api_balance():
             })
         else:
             # No contract resolved - return a placeholder with price if CoinGecko has it
+                        # No contract resolved - return a placeholder with price if CoinGecko has it
             m = markets.get(coin_id)
             price = float(m.get("current_price", 0) or 0) if m else None
-           
+            result["tokens"].append({
+                "coin_id": coin_id,
+                "symbol": (m.get("symbol") or coin_id).upper() if m else coin_id.upper(),
+                "name": m.get("name") or coin_id,
+                "contract": None,
+                "platform": None,
+                "chain": None,
+                "balance": 0.0,
+                "usd_price": price,
+                "price_change_24h": m.get("price_change_percentage_24h") if m else None,
+                "usd_value": 0.0,
+                "logo": m.get("image") if m else None
+            })
+
+    # 4) For explicit tokens (contracts) listed in payload.tokens
+    for t in tokens:
+        try:
+            tchain = t.get("chain") or chain
+            tcontract = t.get("contract")
+            if not tcontract:
+                continue
+            balance = get_erc20_balance(tchain, tcontract, address)
+            # attempt to get coinGecko price via contract endpoint: /coins/{platform}/contract/{contract_address}
+            usd_price = None
+            price_chg = None
+            logo = None
+            coin_name = None
+            coin_symbol = None
+            try:
+                platform_for_cg = None
+                # invert PLATFORM_TO_CHAIN_KEY to find platform name for tchain
+                for pf, ck in PLATFORM_TO_CHAIN_KEY.items():
+                    if ck == tchain:
+                        platform_for_cg = pf
+                        break
+                if platform_for_cg:
+                    r = requests.get(f"{COINGECKO_API}/coins/{platform_for_cg}/contract/{tcontract}", timeout=10)
+                    if r.ok:
+                        info = r.json()
+                        market = info.get("market_data") or {}
+                        usd_price = (market.get("current_price") or {}).get("usd")
+                        price_chg = market.get("price_change_percentage_24h")
+                        coin_name = info.get("name")
+                        coin_symbol = info.get("symbol")
+                        logo = (info.get("image") or {}).get("small")
+            except Exception:
+                # ignore coinGecko contract lookup failure
+                pass
+
+            result["tokens"].append({
+                "coin_id": None,
+                "symbol": (coin_symbol or t.get("symbol") or "").upper() or tcontract[:6],
+                "name": coin_name or t.get("name") or tcontract,
+                "contract": tcontract,
+                "platform": None,
+                "chain": tchain,
+                "balance": balance if balance is not None else 0.0,
+                "usd_price": float(usd_price) if usd_price else None,
+                "price_change_24h": price_chg,
+                "usd_value": (balance or 0.0) * (float(usd_price) if usd_price else 0.0),
+                "logo": logo
+            })
+        except Exception as e:
+            app.logger.exception("token entry failure")
+            result["errors"].append(f"token_error:{str(e)}")
+
+    # final: compute totals (native + tokens) in USD (if possible)
+    total_usd = 0.0
+    if result["native"] and result["native"].get("usd_value"):
+        total_usd += float(result["native"]["usd_value"] or 0.0)
+    for tk in result["tokens"]:
+        try:
+            total_usd += float(tk.get("usd_value") or 0.0)
+        except Exception:
+            pass
+    result["total_usd"] = total_usd
+
+    return jsonify(result)
+
+
+if __name__ == "__main__":
+    # Before starting, attempt to load chain config once
+    try:
+        reload_rpc_config_if_changed()
+    except Exception:
+        app.logger.warning("Initial chain config load failed (ignored)")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=
