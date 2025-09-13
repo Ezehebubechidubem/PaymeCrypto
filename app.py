@@ -14,6 +14,9 @@ Run:
 Notes:
 - Configure RPC endpoints in RPC_URLS dictionary (replace public RPCs with Alchemy/Infura for production).
 - Optional Solana support: `pip install solana` (app will use it if available).
+- You can also provide a chains config file (YAML or JSON) named `chains.yaml` or `chains.json`
+  or specify a custom path via the CHAIN_CONFIG_PATH environment variable.
+- Alternatively, set CHAIN_CONFIG_JSON environment variable with a JSON mapping.
 """
 import os
 import time
@@ -36,6 +39,13 @@ try:
 except Exception:
     SOLANA_AVAILABLE = False
 
+# Optional YAML support
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except Exception:
+    YAML_AVAILABLE = False
+
 app = Flask(__name__)
 CORS(app)
 
@@ -46,8 +56,9 @@ logging.basicConfig(level=logging.INFO)
 # -------------------------
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 
-# RPC endpoints: replace with your own Alchemy/Infura endpoints for production
-RPC_URLS = {
+# Default RPC endpoints: will be merged with chains file (if provided)
+# These are kept intact from the previous code (non-destructive).
+RPC_URLS: Dict[str, str] = {
     "ethereum": os.environ.get("RPC_ETH", "https://cloudflare-eth.com"),
     "bsc": os.environ.get("RPC_BSC", "https://bsc-dataseed.binance.org/"),
     "polygon": os.environ.get("RPC_POLYGON", "https://rpc.ankr.com/polygon"),
@@ -56,7 +67,6 @@ RPC_URLS = {
     "optimism": os.environ.get("RPC_OPT", "https://rpc.ankr.com/optimism"),
     "fantom": os.environ.get("RPC_FANTOM", "https://rpc.ankr.com/fantom"),
     "cronos": os.environ.get("RPC_CRONOS", "https://rpc.vvs.finance"),
-    # add more EVM-compatible chains as needed
     # Solana uses a different SDK (optional)
     "solana": os.environ.get("RPC_SOLANA", "https://api.mainnet-beta.solana.com"),
 }
@@ -79,7 +89,7 @@ ERC20_ABI = [
     },
 ]
 
-# map coinGecko platform key -> our RPC key
+# map coinGecko platform key -> our RPC key (kept intact)
 PLATFORM_TO_CHAIN_KEY = {
     "ethereum": "ethereum",
     "binance-smart-chain": "bsc",
@@ -92,7 +102,7 @@ PLATFORM_TO_CHAIN_KEY = {
     "solana": "solana",
 }
 
-# native coin coinGecko id -> chain key (some common ones)
+# native coin coinGecko id -> chain key (kept intact)
 NATIVE_COIN_TO_CHAIN = {
     "ethereum": "ethereum",
     "binancecoin": "bsc",
@@ -113,8 +123,135 @@ _CACHE_TTL = 12  # seconds for markets, short because frontend refreshes fast
 # create Web3 providers lazily and reuse
 _WEB3_PROVIDERS: Dict[str, Web3] = {}
 
+# config file state
+_CHAIN_CONFIG_PATH = os.environ.get("CHAIN_CONFIG_PATH", None)  # user can override
+if not _CHAIN_CONFIG_PATH:
+    # prefer YAML then JSON in working dir
+    if os.path.exists("chains.yaml"):
+        _CHAIN_CONFIG_PATH = "chains.yaml"
+    elif os.path.exists("chains.json"):
+        _CHAIN_CONFIG_PATH = "chains.json"
+    else:
+        _CHAIN_CONFIG_PATH = None
+
+_CHAIN_CONFIG_MTIME: Optional[float] = None
+
+
+def load_chains_from_env_json() -> Dict[str, str]:
+    """
+    Optional: read CHAIN_CONFIG_JSON env var (JSON string) to load multiple chains.
+    Format: { "chainKey": { "rpc": "https://..." }, ... } or { "chainKey": "https://..." }
+    Returns mapping chainKey -> rpcUrl
+    """
+    cfg = os.environ.get("CHAIN_CONFIG_JSON")
+    if not cfg:
+        return {}
+    try:
+        parsed = json.loads(cfg)
+        result = {}
+        if isinstance(parsed, dict):
+            for k, v in parsed.items():
+                if isinstance(v, str):
+                    result[k] = v
+                elif isinstance(v, dict) and v.get("rpc"):
+                    result[k] = v.get("rpc")
+        return result
+    except Exception:
+        app.logger.warning("Failed to parse CHAIN_CONFIG_JSON env var")
+        return {}
+
+
+def load_chains_file(path: str) -> Dict[str, str]:
+    """
+    Load chains mapping from a YAML or JSON file.
+    Accepts two layouts:
+      - simple map: chainKey: "https://rpc..."
+      - object map: chainKey: { rpc: "https://rpc...", ... }
+    Returns: mapping chainKey -> rpc string
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+            # Try YAML first (if available), otherwise JSON
+            if YAML_AVAILABLE:
+                try:
+                    parsed = yaml.safe_load(raw)
+                except Exception:
+                    parsed = None
+            else:
+                parsed = None
+            if parsed is None:
+                # fallback to JSON
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = None
+            if not parsed or not isinstance(parsed, dict):
+                return {}
+            out = {}
+            for k, v in parsed.items():
+                if isinstance(v, str):
+                    out[k] = v
+                elif isinstance(v, dict):
+                    # accept { rpc: ... } or { "rpc": ... }
+                    if "rpc" in v and isinstance(v["rpc"], str):
+                        out[k] = v["rpc"]
+                    else:
+                        # if there is no 'rpc' key but a single string value, try to coerce
+                        # otherwise skip
+                        continue
+            return out
+    except Exception as e:
+        app.logger.warning("Failed to load chains file %s: %s", path, e)
+        return {}
+
+
+def reload_rpc_config_if_changed():
+    """
+    Reload chain RPC_URLS from config file or env if changed.
+    This merges loaded config into the existing RPC_URLS dict (non-destructive).
+    """
+    global RPC_URLS, _CHAIN_CONFIG_MTIME
+    # 1) env JSON override (highest priority)
+    envcfg = load_chains_from_env_json()
+    if envcfg:
+        # merge envcfg into RPC_URLS (env overrides)
+        for k, v in envcfg.items():
+            RPC_URLS[k] = v
+        # do not return early - still try config file if present (so file can further extend)
+    if not _CHAIN_CONFIG_PATH:
+        return
+    try:
+        mtime = os.path.getmtime(_CHAIN_CONFIG_PATH)
+    except Exception:
+        return
+    if _CHAIN_CONFIG_MTIME is None or mtime != _CHAIN_CONFIG_MTIME:
+        # reload
+        new_map = load_chains_file(_CHAIN_CONFIG_PATH)
+        if new_map:
+            # merge into RPC_URLS (file overrides defaults but do not remove existing keys)
+            for k, v in new_map.items():
+                RPC_URLS[k] = v
+            app.logger.info("Loaded %d chains from %s", len(new_map), _CHAIN_CONFIG_PATH)
+        else:
+            app.logger.info("No valid chain entries found in %s", _CHAIN_CONFIG_PATH)
+        _CHAIN_CONFIG_MTIME = mtime
+
 
 def get_web3(chain_key: str) -> Optional[Web3]:
+    """
+    Create or reuse a Web3 provider for chain_key.
+    This function will lazily reload RPC config file if it changed.
+    """
+    # Attempt to reload configuration if changed (lazy)
+    try:
+        reload_rpc_config_if_changed()
+    except Exception:
+        # any failure here should not break the rest
+        app.logger.debug("reload_rpc_config_if_changed failed (ignored)")
+
     if chain_key not in RPC_URLS:
         return None
     if chain_key in _WEB3_PROVIDERS:
@@ -130,7 +267,7 @@ def get_web3(chain_key: str) -> Optional[Web3]:
 
 
 # -------------------------
-# CoinGecko helpers
+# CoinGecko helpers (unchanged)
 # -------------------------
 def cached_markets(ids: List[str]) -> List[dict]:
     """
@@ -209,7 +346,7 @@ def find_contract_for_coin_id(coin_id: str) -> Optional[Dict[str, str]]:
 
 
 # -------------------------
-# Balance helpers
+# Balance helpers (unchanged)
 # -------------------------
 def get_native_evm_balance(chain_key: str, address: str) -> Optional[float]:
     w3 = get_web3(chain_key)
@@ -263,7 +400,7 @@ def get_solana_balance(address: str) -> Optional[float]:
 
 
 # -------------------------
-# API endpoints
+# API endpoints (unchanged)
 # -------------------------
 @app.route("/api/coins/markets", methods=["GET"])
 def api_coins_markets():
@@ -409,85 +546,4 @@ def api_balance():
             # No contract resolved - return a placeholder with price if CoinGecko has it
             m = markets.get(coin_id)
             price = float(m.get("current_price", 0) or 0) if m else None
-            result["tokens"].append({
-                "coin_id": coin_id,
-                "symbol": (m.get("symbol") or coin_id).upper() if m else coin_id.upper(),
-                "name": m.get("name") or coin_id,
-                "contract": None,
-                "platform": None,
-                "chain": None,
-                "balance": 0.0,
-                "usd_price": price,
-                "price_change_24h": m.get("price_change_percentage_24h") if m else None,
-                "usd_value": 0.0,
-                "logo": m.get("image") if m else None
-            })
-
-    # 4) For explicit tokens (contracts) listed in payload.tokens
-    for t in tokens:
-        try:
-            tchain = t.get("chain") or chain
-            tcontract = t.get("contract")
-            if not tcontract:
-                continue
-            balance = get_erc20_balance(tchain, tcontract, address)
-            # attempt to get coinGecko price via contract endpoint: /coins/{platform}/contract/{contract_address}
-            usd_price = None
-            price_chg = None
-            logo = None
-            coin_name = None
-            coin_symbol = None
-            try:
-                platform_for_cg = None
-                # invert PLATFORM_TO_CHAIN_KEY to find platform name for tchain
-                for pf, ck in PLATFORM_TO_CHAIN_KEY.items():
-                    if ck == tchain:
-                        platform_for_cg = pf
-                        break
-                if platform_for_cg:
-                    r = requests.get(f"{COINGECKO_API}/coins/{platform_for_cg}/contract/{tcontract}", timeout=10)
-                    if r.ok:
-                        info = r.json()
-                        market = info.get("market_data") or {}
-                        usd_price = (market.get("current_price") or {}).get("usd")
-                        price_chg = market.get("price_change_percentage_24h")
-                        coin_name = info.get("name")
-                        coin_symbol = info.get("symbol")
-                        logo = (info.get("image") or {}).get("small")
-            except Exception:
-                # ignore coinGecko contract lookup failure
-                pass
-
-            result["tokens"].append({
-                "coin_id": None,
-                "symbol": (coin_symbol or t.get("symbol") or "").upper() or tcontract[:6],
-                "name": coin_name or t.get("name") or tcontract,
-                "contract": tcontract,
-                "platform": None,
-                "chain": tchain,
-                "balance": balance if balance is not None else 0.0,
-                "usd_price": float(usd_price) if usd_price else None,
-                "price_change_24h": price_chg,
-                "usd_value": (balance or 0.0) * (float(usd_price) if usd_price else 0.0),
-                "logo": logo
-            })
-        except Exception as e:
-            app.logger.exception("token entry failure")
-            result["errors"].append(f"token_error:{str(e)}")
-
-    # final: compute totals (native + tokens) in USD (if possible)
-    total_usd = 0.0
-    if result["native"] and result["native"].get("usd_value"):
-        total_usd += float(result["native"]["usd_value"] or 0.0)
-    for tk in result["tokens"]:
-        try:
-            total_usd += float(tk.get("usd_value") or 0.0)
-        except Exception:
-            pass
-    result["total_usd"] = total_usd
-
-    return jsonify(result)
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+           
