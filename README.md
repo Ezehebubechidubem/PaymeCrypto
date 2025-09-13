@@ -1,2 +1,0 @@
-# PaymeCrypto
-For crypto transactions 
