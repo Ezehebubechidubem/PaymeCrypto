@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Receive — Payme Crypto</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    h1 { color: #00ffae; margin-bottom: 20px; }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 500px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      text-align: center;
+    }
+    .address {
+      background: rgba(0,0,0,0.3);
+      padding: 10px;
+      border-radius: 10px;
+      word-break: break-all;
+      margin: 10px 0;
+      font-family: monospace;
+    }
+    .btn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      font-weight: bold;
+      margin: 6px;
+    }
+    .btn-copy { background: #00bfff; color: #fff; }
+    .btn-add { background: #32cd32; color: #fff; }
+    .network-toggle {
+      margin: 15px 0;
+    }
+    .network-toggle button {
+      padding: 8px 14px;
+      margin: 0 5px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      background: #1b3a4b;
+      color: #fff;
+    }
+    .network-toggle .active {
+      background: #00ffae;
+      color: #00221a;
+    }
+  </style>
+</head>
+<body>
+  <h1>Receive</h1>
+  <div class="card">
+    <div id="netLabel">Mainnet Address</div>
+    <div id="walletAddress" class="address">0x0000...abcd</div>
+    <button class="btn btn-copy" onclick="copyAddress()">Copy Address</button>
+
+    <div class="network-toggle">
+      <button id="mainBtn" class="active" onclick="switchNetwork('mainnet')">Mainnet</button>
+      <button id="testBtn" onclick="switchNetwork('testnet')">Testnet</button>
+    </div>
+
+    <div id="testnetActions" style="display:none;">
+      <button class="btn btn-add" onclick="addPYM()">➕ Add PYM Testnet Token</button>
+      <div id="pymStatus" style="margin-top:8px; color:#00ffae;"></div>
+    </div>
+  </div>
+
+  <script>
+    const wallet = JSON.parse(localStorage.getItem("payme_wallet") || "{}");
+    const addr = wallet.address || "0x0000...abcd";
+    document.getElementById("walletAddress").innerText = addr;
+
+    function copyAddress(){
+      navigator.clipboard.writeText(addr).then(()=>{
+        alert("Address copied!");
+      });
+    }
+
+    function switchNetwork(net){
+      document.getElementById("mainBtn").classList.remove("active");
+      document.getElementById("testBtn").classList.remove("active");
+      if(net==="mainnet"){
+        document.getElementById("mainBtn").classList.add("active");
+        document.getElementById("netLabel").innerText="Mainnet Address";
+        document.getElementById("testnetActions").style.display="none";
+      } else {
+        document.getElementById("testBtn").classList.add("active");
+        document.getElementById("netLabel").innerText="Testnet Address";
+        document.getElementById("testnetActions").style.display="block";
+      }
+    }
+
+    function addPYM(){
+      let data = JSON.parse(localStorage.getItem("payme_tokens") || "{}");
+      if(!data.testnet){ data.testnet = {}; }
+      if(!data.testnet.PYM){ data.testnet.PYM = { balance: 100 }; } // Example add 100 PYM
+      localStorage.setItem("payme_tokens", JSON.stringify(data));
+      document.getElementById("pymStatus").innerText = "PYM token added with 100 balance.";
+    }
+  </script>
+</body>
+</html>
