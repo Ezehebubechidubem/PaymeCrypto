@@ -528,8 +528,187 @@
 
           // 1) native: map chain->coinId and update stored if applicable
           if(j.native){
-            // find a coin id mapping that matches the chain param we used (here 'ethereum')
+                // find a coin id mapping that matches the chain param we used (here 'ethereum')
             for(const cid of Object.keys(NATIVE_COIN_TO_CHAIN)){
               if(NATIVE_COIN_TO_CHAIN[cid] === "ethereum"){
                 // update stored.mainnet[cid].balance if present
-                const stor
+                const stored2 = readStoredTokens();
+                stored2.mainnet = stored2.mainnet || {};
+                stored2.mainnet[cid] = stored2.mainnet[cid] || stored.mainnet && stored.mainnet[cid] || {};
+                stored2.mainnet[cid].balance = Number(j.native.balance || 0);
+                writeStoredTokens(stored2);
+                // update row shown
+                const existing = tokenRows[cid];
+                const price = existing ? Number(existing.meta.price || 0) : (stored2.mainnet[cid].price || 0);
+                const pct = existing ? Number(existing.meta.pct || 0) : 0;
+                createOrUpdateRow(cid, {
+                  symbol: existing ? existing.meta.symbol : (cid.toUpperCase()),
+                  name: existing ? existing.meta.name : cid,
+                  image: existing ? existing.meta.image : null,
+                  priceStr: fmt(price),
+                  price,
+                  pct,
+                  balance: Number(j.native.balance || 0),
+                  isPayme:false
+                }, "mainnet");
+                break;
+              }
+            }
+          }
+
+          // 2) iterate result.tokens and update matching stored.mainnet entries
+          if(Array.isArray(j.tokens)){
+            const stored2 = readStoredTokens();
+            stored2.mainnet = stored2.mainnet || {};
+            j.tokens.forEach(tok => {
+              // if coin_id exists (CoinGecko id) and we have that saved, update its balance
+              if(tok.coin_id && stored2.mainnet && stored2.mainnet[tok.coin_id] !== undefined){
+                stored2.mainnet[tok.coin_id].balance = Number(tok.balance || 0);
+                // update display row
+                const existing = tokenRows[tok.coin_id];
+                const price = tok.usd_price || (existing ? Number(existing.meta.price || 0) : 0);
+                const pct = tok.price_change_24h || (existing ? existing.meta.pct : 0);
+                createOrUpdateRow(tok.coin_id, {
+                  symbol: (tok.symbol || (existing ? existing.meta.symbol : tok.coin_id)).toUpperCase(),
+                  name: tok.name || (existing?existing.meta.name:tok.coin_id),
+                  image: tok.logo || (existing?existing.meta.image:null),
+                  priceStr: fmt(price),
+                  price,
+                  pct,
+                  balance: Number(tok.balance||0),
+                  isPayme:false
+                }, "mainnet");
+              } else if(tok.contract){
+                // if stored had explicit token by contract we could update it; but by default our UI stores coinGecko ids
+                // attempt to find by contract in stored.mainnet entries (rare)
+                Object.keys(stored2.mainnet||{}).forEach(k=>{
+                  const item = stored2.mainnet[k];
+                  if(item && item.contract && item.contract.toLowerCase() === String(tok.contract || "").toLowerCase()){
+                    item.balance = Number(tok.balance || 0);
+                    const existing = tokenRows[k];
+                    const price = tok.usd_price || (existing ? Number(existing.meta.price || 0) : 0);
+                    const pct = tok.price_change_24h || (existing ? existing.meta.pct : 0);
+                    createOrUpdateRow(k, {
+                      symbol: (tok.symbol || (existing ? existing.meta.symbol : k)).toUpperCase(),
+                      name: tok.name || (existing?existing.meta.name:k),
+                      image: tok.logo || (existing?existing.meta.image:null),
+                      priceStr: fmt(price),
+                      price,
+                      pct,
+                      balance: Number(tok.balance||0),
+                      isPayme:false
+                    }, "mainnet");
+                  }
+                });
+              }
+            });
+            writeStoredTokens(stored2);
+          }
+        } catch(e){
+          console.warn("updateOnChainBalances failed", e);
+        }
+      } else {
+        // testnet: nothing to query on-chain through this flow (keep stored.testnet)
+      }
+
+      // recompute totals (call price updater to rebuild total from current row metas)
+      const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
+      await updatePricesAndDisplay(activeNet);
+    }
+
+    /***********************************************
+     * Add token flow (calls backend search) — NO BALANCE PROMPT
+     ***********************************************/
+    async function onAddTokenClicked(){
+      const status = document.getElementById("addTokenStatus");
+      status.innerText = "";
+      try {
+        const q = prompt("Search token on CoinGecko by name or symbol (e.g. 'uniswap' or 'uni'):");
+        if(!q) return;
+        status.innerText = "Searching CoinGecko...";
+        const sres = await fetch(`${BACKEND_URL}/api/coins/search?query=` + encodeURIComponent(q));
+        const sjson = await sres.json();
+        const coins = sjson.coins || [];
+        if(coins.length === 0){
+          alert("No matching token found on CoinGecko.");
+          status.innerText = "";
+          return;
+        }
+        let choices = coins.slice(0,6).map((c,i)=>`${i+1}. ${c.name} (${c.symbol}) : id=${c.id}`).join("\n");
+        let pick = prompt("Choose a token by number (or press Cancel to pick first):\n\n" + choices, "1");
+        let idx = 0;
+        if(pick){
+          const p = parseInt(pick,10);
+          if(!isNaN(p) && p >= 1 && p <= Math.min(6, coins.length)) idx = p-1;
+        }
+        const coin = coins[idx];
+        if(!coin || !coin.id){
+          alert("Invalid selection.");
+          status.innerText = "";
+          return;
+        }
+        const stored = readStoredTokens();
+        stored.mainnet = stored.mainnet || {};
+        // preserve existing balance if present
+        const prevBal = stored.mainnet && stored.mainnet[coin.id] ? stored.mainnet[coin.id].balance || 0 : 0;
+        stored.mainnet[coin.id] = {
+          symbol: coin.symbol.toUpperCase(),
+          name: coin.name,
+          balance: prevBal
+        };
+        writeStoredTokens(stored);
+        status.innerText = `Added ${coin.symbol.toUpperCase()} — balance will be detected from wallet (if connected).`;
+        // update UI & attempt on-chain fetch
+        await updatePricesAndDisplay("mainnet");
+        if(walletAddress) updateOnChainBalances("mainnet").catch(()=>{});
+      } catch (err) {
+        console.error("Add token error", err);
+        alert("Failed to add token.");
+        document.getElementById("addTokenStatus").innerText = "";
+      }
+    }
+
+    /***********************************************
+     * Network switching & intervals
+     ***********************************************/
+    async function renderInitial(net){
+      await updatePricesAndDisplay(net);
+      if(walletAddress) {
+        // fetch on-chain balances once immediately (non-blocking)
+        updateOnChainBalances(net).catch(()=>{});
+      }
+    }
+
+    // initial render
+    renderInitial("mainnet");
+
+    // fast price updates (every 3s) — in-place updates only (no DOM wipe)
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      const net = mainActive ? "mainnet" : "testnet";
+      await updatePricesAndDisplay(net);
+    }, 3000);
+
+    // On-chain balance updates every 8s (if wallet connected)
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      if(mainActive && walletAddress){
+        await updateOnChainBalances("mainnet");
+      }
+    }, 8000);
+
+    // switchNetwork function (preserve behavior)
+    function switchNetwork(net){
+      document.getElementById("mainBtn").classList.remove("active");
+      document.getElementById("testBtn").classList.remove("active");
+      if(net==="mainnet"){document.getElementById("mainBtn").classList.add("active");}
+      else{document.getElementById("testBtn").classList.add("active");}
+      renderInitial(net);
+    }
+
+    window.switchNetwork = switchNetwork;
+    window.onAddTokenClicked = onAddTokenClicked;
+  </script>
+</body>
+</html>
+
