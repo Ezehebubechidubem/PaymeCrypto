@@ -4,7 +4,7 @@ Flask-Cors==3.0.10
 gunicorn==21.2.0
 Cython==0.29.36
 
-# EVM support (Ethereum, BSC, Polygon, Avalanche, etc.)
+# EVM support
 web3==6.5.0
 eth-account==0.9.0
 
@@ -15,7 +15,7 @@ python-dotenv==1.0.0
 
 # Async + performance
 aiohttp==3.8.5
-httpx==0.25.0
+httpx==0.23.1
 
 # Non-EVM chains
 # Solana
