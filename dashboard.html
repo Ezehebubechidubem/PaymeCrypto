@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Payme Crypto — Dashboard</title>
 
-  <!-- ethers v6 UMD -->
+  <!-- ethers v6 UMD (used to query RPCs & token contracts when needed) -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.6.0/dist/ethers.umd.min.js"></script>
 
   <style>
@@ -26,7 +26,7 @@
       border-radius: 16px;
       padding: 20px;
       width: 100%;
-      max-width: 500px;
+      max-width: 720px;
       box-shadow: 0 6px 20px rgba(0,0,0,0.4);
       margin-bottom: 20px;
     }
@@ -60,14 +60,13 @@
       gap: 10px;
       margin: 15px 0;
       flex-direction: row; /* horizontal */
-      /* allow horizontal scrolling on very narrow screens while keeping horizontal layout */
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       padding-bottom: 2px;
     }
     .actions button {
-      flex: 1;           /* equal width across row */
-      min-width: 80px;  /* ensures they remain usable on small screens */
+      flex: 1;
+      min-width: 80px;
       padding: 12px 16px;
       font-size: 16px;
       border: none;
@@ -90,6 +89,9 @@
       border-radius: 10px;
       background: rgba(255,255,255,0.06);
       margin-bottom: 10px;
+      position: relative; /* for swipe delete */
+      overflow: hidden;
+      touch-action: pan-y;
     }
 
     /* Left column: token symbol (with optional logo) on first line, full name below */
@@ -99,7 +101,6 @@
       align-items: flex-start;
       gap: 6px;
     }
-    /* Symbol row shows logo + ticker inline */
     .symbol {
       font-weight: bold;
       display:flex;
@@ -122,10 +123,6 @@
     /* token image */
     .token-img { width:28px; height:28px; border-radius:50%; object-fit:cover; display:inline-block; vertical-align:middle; }
 
-    /* price change */
-    .pct-up { color: #4cd97b; font-weight:700; }
-    .pct-down { color: #ff6b6b; font-weight:700; }
-
     /* PAYME testnet badge */
     .payme-badge {
       width:28px;height:28px;border-radius:50%;background:#1e90ff;color:#fff;display:inline-flex;
@@ -147,14 +144,34 @@
 
     .muted { color: rgba(255,255,255,0.65); font-size:13px; }
 
-    /* keep horizontal layout on phones — do not convert actions or token rows to vertical */
+    /* delete button that appears when swiped left (hidden by default) */
+    .delete-btn {
+      position: absolute;
+      right: -80px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #ff4d4f;
+      color: #fff;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-weight:700;
+      transition: right .2s ease;
+      cursor:pointer;
+    }
+
+    /* when row has .show-delete, reveal delete button */
+    .token-item.show-delete .delete-btn { right: 8px; }
+
     @media (max-width:420px){
-      .token-item { /* keep row layout but allow wrapping if needed */
-        flex-wrap: nowrap;
-      }
+      .token-item { flex-wrap: nowrap; }
       .actions { gap:8px; }
       .actions button { padding:10px 12px; min-width:70px; }
     }
+
+    /* small settings row */
+    .settings-row { display:flex; gap:10px; justify-content:center; align-items:center; margin:8px 0; flex-wrap:wrap; }
+    .settings-row select, .settings-row label { font-size:13px; }
   </style>
 </head>
 <body>
@@ -171,6 +188,28 @@
       <button id="testBtn" onclick="switchNetwork('testnet')">Testnet</button>
     </div>
 
+    <!-- NEW: settings row (preferred chain + backend-only toggle) -->
+    <div class="settings-row">
+      <label>
+        Preferred backend chain:
+        <select id="preferredChain" title="Preferred chain to send to backend (affects native display)">
+          <option value="ethereum">Ethereum</option>
+          <option value="bsc">BSC</option>
+          <option value="polygon">Polygon</option>
+          <option value="avax">Avalanche</option>
+          <option value="arbitrum">Arbitrum</option>
+          <option value="optimism">Optimism</option>
+          <option value="fantom">Fantom</option>
+          <option value="solana">Solana</option>
+        </select>
+      </label>
+
+      <label style="display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="backendOnly" />
+        Backend-only balances
+      </label>
+    </div>
+
     <div id="balance" class="balance">$0.00 (Mainnet)</div>
 
     <div class="actions">
@@ -184,101 +223,36 @@
   <div id="tokens" class="card token-list">
     <button class="add-token-btn" onclick="onAddTokenClicked()">+ Add Token (CoinGecko)</button>
     <div id="addTokenStatus" style="margin-top:8px;"></div>
+    <!-- token rows appended here -->
   </div>
 
   <script>
-    /*******************************
-     * Backend integration (DO NOT change)
-     *******************************/
-    // <-- set this to your deployed backend (Render) URL
-    const API_BASE = "https://paymecrypto-1.onrender.com";
-
-    // small helper: call backend markets, fallback to CoinGecko
-    async function fetchMarketsViaBackend(ids){
-      if(!ids || ids.length===0) return [];
-      const q = encodeURIComponent(ids.join(","));
-      // try backend first
-      try {
-        const res = await fetch(`${API_BASE}/api/coins/markets?ids=${q}`);
-        if(res.ok){
-          const data = await res.json();
-          if(Array.isArray(data)) return data;
-        }
-        // if backend returns something but not ok, fallback below
-      } catch(e){
-        // ignore and fallback
-        console.warn("Backend markets call failed, falling back to CoinGecko", e);
-      }
-      // fallback direct to CoinGecko
-      try {
-        const res2 = await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + q + "&price_change_percentage=24h");
-        if(res2.ok){
-          return await res2.json();
-        }
-      } catch(e2){
-        console.warn("CoinGecko fallback failed", e2);
-      }
-      return [];
-    }
-
-    // search wrapper - backend -> fallback direct
-    async function searchCoinGecko(q){
-      if(!q) return { coins: [] };
-      try {
-        const res = await fetch(`${API_BASE}/api/coins/search?q=${encodeURIComponent(q)}`);
-        if(res.ok){
-          return await res.json();
-        }
-      } catch(e){
-        console.warn("Backend search failed, fallback to CoinGecko", e);
-      }
-      // fallback
-      const res2 = await fetch("https://api.coingecko.com/api/v3/search?query=" + encodeURIComponent(q));
-      return await res2.json();
-    }
-
-    // call backend to fetch on-chain balances (preferred)
-    async function fetchBalancesFromBackend(chainKey, address, coinIds = [], explicitTokens = []){
-      try {
-        const res = await fetch(`${API_BASE}/api/balance`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chain: chainKey,
-            address: address,
-            coin_ids: coinIds,
-            tokens: explicitTokens
-          })
-        });
-        if(!res.ok) throw new Error("backend balance call failed");
-        return await res.json();
-      } catch(e){
-        console.warn("fetchBalancesFromBackend failed:", e);
-        return null;
-      }
-    }
+    /***********************************************
+     * BACKEND URL (your Render link)
+     ***********************************************/
+    const BACKEND_URL = "https://paymecrypto-1.onrender.com"; // change if needed
 
     /***********************
-     * Basic data & storage
+     * Data & storage keys
      ***********************/
     const STORAGE_WALLET = "payme_wallet";
-    const STORAGE_TOKENS = "payme_tokens"; // structure: { mainnet: { coinId: { symbol,name,balance } }, testnet: { PYM: { balance } } }
+    const STORAGE_TOKENS = "payme_tokens";
 
     // show derived wallet address (if any)
     const wallet = JSON.parse(localStorage.getItem(STORAGE_WALLET) || "{}");
-    const walletAddress = (wallet && wallet.address) ? wallet.address : null;
+    const walletAddress = wallet?.address || null;
     document.getElementById("walletAddr").innerText = walletAddress || "0x1234...abcd";
 
     // default mainnet tokens (CoinGecko ids)
-    const DEFAULT_MAINNET_IDS = ["ethereum","binancecoin"]; // CoinGecko ids for ETH and BNB
+    const DEFAULT_MAINNET_IDS = ["ethereum","binancecoin"];
 
-    // minimal ERC20 ABI (for in-browser fallback)
+    // minimal ERC20 ABI for JS-side contract usage (if needed)
     const ERC20_ABI = [
       "function balanceOf(address) view returns (uint256)",
       "function decimals() view returns (uint8)"
     ];
 
-    // RPC providers for browser fallback (kept for compatibility if backend fails)
+    // Providers (used when frontend does on-chain queries)
     const PROVIDERS = {
       eth: new ethers.JsonRpcProvider("https://cloudflare-eth.com"),
       bsc: new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/"),
@@ -286,164 +260,219 @@
       avax: new ethers.JsonRpcProvider("https://rpc.ankr.com/avalanche"),
       arbitrum: new ethers.JsonRpcProvider("https://rpc.ankr.com/arbitrum"),
       optimism: new ethers.JsonRpcProvider("https://rpc.ankr.com/optimism"),
-      fantom: new ethers.JsonRpcProvider("https://rpc.ankr.com/fantom")
-      // add more if you need
+      fantom: new ethers.JsonRpcProvider("https://rpc.ankr.com/fantom"),
     };
 
-    // map coinGecko platform key -> our provider keys (partial)
-    const PLATFORM_TO_PROVIDER = {
-      "ethereum": PROVIDERS.eth,
-      "binance-smart-chain": PROVIDERS.bsc,
-      "polygon-pos": PROVIDERS.polygon,
-      "avalanche": PROVIDERS.avax,
-      "arbitrum-one": PROVIDERS.arbitrum,
-      "optimistic-ethereum": PROVIDERS.optimism,
-      "fantom": PROVIDERS.fantom
+    const NATIVE_ID_TO_PROVIDER_KEY = {
+      "ethereum": "eth",
+      "binancecoin": "bsc",
+      "polygon": "polygon",
+      "avalanche-2": "avax",
+      "arbitrum": "arbitrum",
+      "optimism": "optimism",
+      "fantom": "fantom"
     };
 
-    // small helpers to read / write tokens
-    function readStoredTokens(){
-      try { return JSON.parse(localStorage.getItem(STORAGE_TOKENS) || "{}"); }
-      catch(e) { return {}; }
-    }
-    function writeStoredTokens(obj){
-      localStorage.setItem(STORAGE_TOKENS, JSON.stringify(obj));
-    }
+    // Token rows cache (keeps DOM and meta to prevent blinking)
+    const tokenRows = {}; // keyed by coinId (mainnet) or token symbol (testnet PYM)
+
+    // Utility: format number for display
     function fmt(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8}); }
 
-    /***********************
-     * Row management (creates & updates token rows in-place)
-     ***********************/
-    const tokenRows = {}; // id -> {node, meta}
+    // Read/write stored tokens
+    function readStoredTokens(){
+      try { return JSON.parse(localStorage.getItem(STORAGE_TOKENS) || "{}"); }
+      catch(e){ return {}; }
+    }
+    function writeStoredTokens(obj){ localStorage.setItem(STORAGE_TOKENS, JSON.stringify(obj)); }
 
-    function createOrUpdateRow(id, meta){
-      // id is either coinId for mainnet or symbol key for testnet (e.g., PYM)
-      // meta: { symbol, name, image, priceStr, price, pct, balance, isPayme }
-      let entry = tokenRows[id];
+    /***********************
+     * Helpers: UI settings
+     ***********************/
+    function getPreferredChain(){
+      const sel = document.getElementById("preferredChain");
+      if(!sel) return "ethereum";
+      return sel.value || "ethereum";
+    }
+    function isBackendOnly(){
+      const chk = document.getElementById("backendOnly");
+      return !!(chk && chk.checked);
+    }
+
+    // persist user's preferred chain between reloads (optional)
+    (function restoreSettings(){
+      const saved = localStorage.getItem("payme_pref_chain");
+      if(saved){
+        const sel=document.getElementById("preferredChain");
+        if(sel) sel.value = saved;
+      }
+      const savedBackendOnly = localStorage.getItem("payme_backend_only");
+      if(savedBackendOnly === "true"){
+        document.getElementById("backendOnly").checked = true;
+      }
+    })();
+    document.getElementById("preferredChain").addEventListener("change", (e)=>{
+      localStorage.setItem("payme_pref_chain", e.target.value);
+      // re-render using new chain preference
+      renderInitial(document.getElementById("mainBtn").classList.contains("active") ? "mainnet" : "testnet");
+    });
+    document.getElementById("backendOnly").addEventListener("change",(e)=>{
+      localStorage.setItem("payme_backend_only", e.target.checked ? "true" : "false");
+      renderInitial(document.getElementById("mainBtn").classList.contains("active") ? "mainnet" : "testnet");
+    });
+
+    /***********************
+     * Backend-aware wrappers
+     ***********************/
+    async function fetchMarkets(ids){
+      if(!ids || ids.length === 0) return [];
+      const q = encodeURIComponent(ids.join(","));
+      if(BACKEND_URL){
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/coins/markets?ids=${q}`);
+          if(res.ok) return await res.json();
+        } catch(e){
+          console.warn("Backend markets call failed, falling back to CoinGecko:", e);
+        }
+      }
+      try {
+        const res = await fetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=" + q + "&price_change_percentage=24h");
+        return await res.json();
+      } catch(e){
+        console.warn("CoinGecko markets fetch failed", e);
+        return [];
+      }
+    }
+
+    async function fetchSearch(q){
+      if(!q) return { coins: [] };
+      const enc = encodeURIComponent(q);
+      if(BACKEND_URL){
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/coins/search?q=${enc}`);
+          if(res.ok) return await res.json();
+        } catch(e){
+          console.warn("Backend search failed, falling back to CoinGecko:", e);
+        }
+      }
+      try {
+        const res = await fetch("https://api.coingecko.com/api/v3/search?query=" + enc);
+        return await res.json();
+      } catch(e){
+        console.warn("CoinGecko search failed", e);
+        return { coins: [] };
+      }
+    }
+
+    async function fetchBalancesFromBackend(chainKey, address, coinIds){
+      if(!BACKEND_URL) return null;
+      try {
+        const body = { chain: chainKey || getPreferredChain() || "ethereum", address: address, coin_ids: coinIds || [] };
+        const res = await fetch(BACKEND_URL + "/api/balance", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        if(!res.ok) return null;
+        return await res.json();
+      } catch(e){
+        console.warn("Backend balance fetch failed", e);
+        return null;
+      }
+    }
+
+    /***********************
+     * DOM: create or update row (non-destructive)
+     ***********************/
+    function createOrUpdateRow(idKey, meta){
+      const container = document.getElementById("tokens");
+      let entry = tokenRows[idKey];
       if(!entry){
-        // create
-        const container = document.getElementById("tokens");
         const row = document.createElement("div");
         row.className = "token-item";
-        row.dataset.tokenId = id;
+        row.dataset.key = idKey;
 
-        // left
         const left = document.createElement("div");
-        const sym = document.createElement("div");
-        sym.className = "symbol";
-        const imgWrap = document.createElement("span");
-        if(meta.isPayme){
-          imgWrap.innerHTML = `<span class="payme-badge">PY</span>`;
-        } else if(meta.image){
-          imgWrap.innerHTML = `<img class="token-img" src="${meta.image}" alt="${meta.symbol}">`;
-        } else {
-          imgWrap.innerHTML = `<div style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.03);display:inline-block;margin-right:8px;"></div>`;
-        }
-        sym.appendChild(imgWrap);
-        const symText = document.createElement("span");
-        symText.style.marginLeft = "6px";
-        symText.innerText = meta.symbol || id.toUpperCase();
-        sym.appendChild(symText);
-        left.appendChild(sym);
-        const nameEl = document.createElement("div");
-        nameEl.className = "muted";
-        nameEl.style.fontSize = "13px";
-        nameEl.innerText = meta.name || id;
-        left.appendChild(nameEl);
-
-        // right
         const right = document.createElement("div");
-        const amountEl = document.createElement("div");
-        amountEl.className = "token-amount";
-        amountEl.innerText = `${fmt(meta.balance||0)} ${meta.symbol || id.toUpperCase()}`;
-        const priceEl = document.createElement("div");
-        priceEl.className = "price";
-        priceEl.innerText = `$${meta.price ? fmt(meta.price) : (meta.priceStr || "0.00")}`;
 
-        // pct
-        const pctEl = document.createElement("div");
-        pctEl.style.fontSize = "13px";
-        if(typeof meta.pct === "number"){
-          pctEl.innerText = `${meta.pct > 0 ? "+" : ""}${Number(meta.pct).toFixed(2)}%`;
-          pctEl.className = meta.pct >= 0 ? "pct-up" : "pct-down";
-        } else {
-          pctEl.innerText = "";
-        }
-
-        right.appendChild(amountEl);
-        right.appendChild(priceEl);
-        right.appendChild(pctEl);
+        const del = document.createElement("button");
+        del.className = "delete-btn";
+        del.textContent = "Delete";
+        del.onclick = (e)=>{
+          e.stopPropagation();
+          const stored = readStoredTokens();
+          if(document.getElementById("mainBtn").classList.contains("active")){
+            if(stored.mainnet && stored.mainnet[idKey]) { delete stored.mainnet[idKey]; writeStoredTokens(stored); }
+          } else {
+            if(stored.testnet && stored.testnet[idKey]) { delete stored.testnet[idKey]; writeStoredTokens(stored); }
+          }
+          row.remove();
+          delete tokenRows[idKey];
+        };
 
         row.appendChild(left);
         row.appendChild(right);
+        row.appendChild(del);
 
-        // insert row after add button/status area (so add button remains at top)
-        const tokensCard = document.getElementById("tokens");
-        tokensCard.appendChild(row);
+        // swipe handlers to reveal delete
+        let startX = null;
+        row.addEventListener('touchstart', (ev)=>{ startX = ev.touches[0].clientX; }, {passive:true});
+        row.addEventListener('touchmove', (ev)=>{
+          if(startX === null) return;
+          const dx = ev.touches[0].clientX - startX;
+          if(dx < -30) row.classList.add('show-delete');
+        }, {passive:true});
+        row.addEventListener('touchend', ()=>{ startX = null; });
 
-        tokenRows[id] = { node: row, meta: Object.assign({}, meta), els: { amountEl, priceEl, pctEl, nameEl, symText, imgWrap } };
-        return;
+        // mouse drag for desktop
+        let mdown=false, mxStart=0;
+        row.addEventListener('mousedown', (e)=>{ mdown=true; mxStart=e.clientX; });
+        window.addEventListener('mousemove',(e)=>{ if(!mdown) return; const dx=e.clientX-mxStart; if(dx < -30) row.classList.add('show-delete'); });
+        window.addEventListener('mouseup', ()=>{ mdown=false; });
+
+        // click opens detail page with chain param
+        row.addEventListener('click', ()=>{
+          const preferredChain = getPreferredChain();
+          const params = new URLSearchParams({ key: idKey, net: document.getElementById("mainBtn").classList.contains("active") ? "mainnet" : "testnet", chain: preferredChain });
+          window.open("token.html?" + params.toString(), "_blank");
+        });
+
+        // append after add button (add button is first child)
+        container.appendChild(row);
+        entry = { row, left, right, del, meta: {} };
+        tokenRows[idKey] = entry;
       }
 
-      // update existing row in-place (do not remove node)
-      // update meta fields only if changed
-      const els = entry.els;
-      entry.meta = Object.assign({}, entry.meta || {}, meta);
+      // update DOM in-place
+      const left = entry.left;
+      const right = entry.right;
 
-      // update image if changed
-      if(meta.isPayme){
-        els.imgWrap.innerHTML = `<span class="payme-badge">PY</span>`;
-      } else if(meta.image){
-        // only replace src if different
-        const prevImg = els.imgWrap.querySelector("img");
-        if(prevImg){
-          if(prevImg.src !== meta.image) prevImg.src = meta.image;
-        } else {
-          els.imgWrap.innerHTML = `<img class="token-img" src="${meta.image}" alt="${meta.symbol}">`;
-        }
-      } else {
-        // keep existing placeholder if already present
-        if(!els.imgWrap.querySelector("img") && !els.imgWrap.querySelector(".payme-badge")){
-          els.imgWrap.innerHTML = `<div style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.03);display:inline-block;margin-right:8px;"></div>`;
-        }
-      }
+      left.innerHTML = `
+        <div class="symbol">
+          ${meta.image ? `<img class="token-img" src="${meta.image}" alt="${meta.symbol}">` : (meta.isPayme ? `<span class="payme-badge">PY</span>` : `<div style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.03);display:inline-block;margin-right:8px;"></div>`)}
+          ${meta.symbol}
+        </div>
+        <div class="muted">${meta.name || ""}</div>
+      `;
 
-      if(meta.symbol) els.symText.innerText = meta.symbol;
-      if(meta.name) els.nameEl.innerText = meta.name;
-      if(typeof meta.balance !== "undefined") els.amountEl.innerText = `${fmt(meta.balance)} ${meta.symbol || ""}`;
-      if(typeof meta.price !== "undefined" || meta.priceStr) els.priceEl.innerText = `$${meta.price ? fmt(meta.price) : (meta.priceStr || "0.00")}`;
-      if(typeof meta.pct !== "undefined"){
-        els.pctEl.innerText = `${meta.pct > 0 ? "+" : ""}${Number(meta.pct).toFixed(2)}%`;
-        els.pctEl.className = meta.pct >= 0 ? "pct-up" : "pct-down";
-      }
+      const pct = typeof meta.pct === 'number' ? meta.pct : 0;
+      const pctStr = (pct >= 0 ? "+" : "") + Number(pct).toFixed(2) + "%";
+      const pctHtml = `<div style="font-size:12px; ${pct < 0 ? 'color:#ff7b7b' : 'color:#9fe6c8'}">${pctStr}</div>`;
+
+      right.innerHTML = `
+        <div class="token-amount">${fmt(meta.balance || 0)} ${meta.symbol}</div>
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end">
+          <div class="price">$${meta.price ? fmt(meta.price) : meta.priceStr || "0.00"}</div>
+          ${pctHtml}
+        </div>
+      `;
+
+      entry.meta = meta;
     }
 
     /***********************
-     * Utilities used by pricing/balance flows
+     * getMainnetIds helper
      ***********************/
-    // find contract for coinId (fallback uses direct CoinGecko coin detail)
-    async function findContractForCoinId(coinId){
-      try {
-        const res = await fetch(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(coinId)}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false`);
-        if(!res.ok) return null;
-        const detail = await res.json();
-        const platforms = detail.platforms || {};
-        const order = ["ethereum","binance-smart-chain","polygon-pos","avalanche","arbitrum-one","optimistic-ethereum"];
-        for(const pf of order){
-          const addr = platforms[pf];
-          if(addr && addr !== "") return { contract: addr, platform: pf };
-        }
-        // fallback any non-empty
-        for(const k in platforms){
-          if(platforms[k]) return { contract: platforms[k], platform: k };
-        }
-      } catch(e){
-        console.warn("findContractForCoinId failed:", e);
-      }
-      return null;
-    }
-
-    // helper to get mainnet ids
     function getMainnetIds(stored){
       const storedMain = stored.mainnet ? Object.keys(stored.mainnet) : [];
       const idsSet = new Set([...DEFAULT_MAINNET_IDS, ...storedMain]);
@@ -451,16 +480,13 @@
     }
 
     /***********************
-     * Price & display update logic
-     * (this is the code you provided earlier; I've wired it to use fetchMarketsViaBackend)
+     * updatePricesAndDisplay (non-destructive)
      ***********************/
-    // Update prices and meta for visible tokens (in-place, resilient)
     async function updatePricesAndDisplay(net){
       const stored = readStoredTokens();
 
       if(net === 'mainnet'){
         const ids = getMainnetIds(stored);
-        // if no ids but tokenRows already present, compute total from tokenRows
         if(ids.length === 0){
           let totalFallback = 0;
           for(const k of Object.keys(tokenRows)){
@@ -472,12 +498,11 @@
           return;
         }
 
-        // fetch market data (via backend wrapper)
         let markets = [];
         try {
-          markets = await fetchMarketsViaBackend(ids);
+          markets = await fetchMarkets(ids);
         } catch(err){
-          console.warn("CoinGecko markets fetch failed", err);
+          console.warn("markets fetch failed:", err);
           markets = [];
         }
         const marketMap = {};
@@ -496,7 +521,6 @@
           const pct = m && typeof m.price_change_percentage_24h === 'number' ? Number(m.price_change_percentage_24h) : (prevMeta.pct ? Number(prevMeta.pct) : 0);
           const image = m && m.image ? m.image : (prevMeta.image || null);
 
-          // prefer on-chain/stored balance if present; if none, keep previous meta balance (don't wipe)
           let bal = 0;
           if(stored.mainnet && stored.mainnet[id] && typeof stored.mainnet[id].balance !== 'undefined'){
             bal = Number(stored.mainnet[id].balance || 0);
@@ -528,282 +552,5 @@
         const t = stored.testnet || {};
         const keys = Object.keys(t);
         if(keys.length === 0){
-          // compute fallback total from tokenRows testnet entries if
-       // compute fallback total from tokenRows testnet entries if present
           let fallback = 0;
-          for(const k of Object.keys(tokenRows)){
-            if(k === 'PYM' || (t && t[k])) {
-              const meta = tokenRows[k] && tokenRows[k].meta ? tokenRows[k].meta : null;
-              if(meta) fallback += (Number(meta.balance||0) * Number(meta.price||0));
-            }
-          }
-          if(fallback > 0 && fallback < 0.01) document.getElementById("balance").innerText = `<$0.01 (Testnet)`;
-          else document.getElementById("balance").innerText = `$${fmt(fallback)} (Testnet)`;
-          return;
-        }
-
-        let total = 0;
-        for(const k of keys){
-          const item = t[k];
-          const balStored = Number(item.balance || 0);
-          const prevMeta = tokenRows[k] ? tokenRows[k].meta : {};
-          const price = (k === "PYM") ? 0.5 : (item.price || prevMeta.price || 0);
-          const meta = {
-            symbol: k.toUpperCase(),
-            name: item.name || (k === "PYM" ? "Testnet Token" : k),
-            image: null,
-            priceStr: fmt(price),
-            price,
-            pct: prevMeta ? (prevMeta.pct || 0) : 0,
-            balance: typeof item.balance !== 'undefined' ? balStored : (prevMeta.balance || 0),
-            isPayme: (k === "PYM")
-          };
-          createOrUpdateRow(k, meta);
-          total += meta.balance * price;
-        }
-        if(total > 0 && total < 0.01) document.getElementById("balance").innerText = `<$0.01 (Testnet)`;
-        else document.getElementById("balance").innerText = `$${fmt(total)} (Testnet)`;
-      }
-    }
-
-    /***********************
-     * On-chain balance synchronization
-     * Prefer backend call; fallback to in-browser provider calls
-     ***********************/
-    async function updateOnChainBalances(net){
-      const stored = readStoredTokens();
-      if(net === 'mainnet'){
-        const ids = getMainnetIds(stored);
-        if(!walletAddress) return;
-
-        // 1) Prefer backend consolidated balance call (fast & avoids RPC keys in browser)
-        try {
-          const backendRes = await fetchBalancesFromBackend("ethereum", walletAddress, ids);
-          if(backendRes){
-            // native
-            if(backendRes.native){
-              // map native coin id (attempt to find "ethereum")
-              // we'll store under "ethereum" if it exists in ids
-              if(ids.includes("ethereum")){
-                stored.mainnet = stored.mainnet || {};
-                stored.mainnet["ethereum"] = stored.mainnet["ethereum"] || {};
-                stored.mainnet["ethereum"].balance = Number(backendRes.native.balance || 0);
-              }
-            }
-            // tokens
-            (backendRes.tokens || []).forEach(t => {
-              // coin_id may be present (preferred)
-              const key = t.coin_id || (t.symbol ? t.symbol.toLowerCase() : null) || t.contract || ("c_"+(t.contract||"").slice(0,6));
-              // store under mainnet using coin_id where possible
-              if(t.coin_id){
-                stored.mainnet = stored.mainnet || {};
-                stored.mainnet[t.coin_id] = stored.mainnet[t.coin_id] || {};
-                stored.mainnet[t.coin_id].balance = Number(t.balance || 0);
-                stored.mainnet[t.coin_id].symbol = (t.symbol || stored.mainnet[t.coin_id].symbol || "").toUpperCase();
-                stored.mainnet[t.coin_id].name = t.name || stored.mainnet[t.coin_id].name;
-              } else {
-                // fallback: attempt to find matching stored entry by symbol
-                // do nothing complicated — keep stored as-is
-              }
-
-              // update UI row
-              const meta = {
-                symbol: (t.symbol || "").toUpperCase(),
-                name: t.name || "",
-                image: t.logo || null,
-                priceStr: t.usd_price ? fmt(t.usd_price) : (t.priceStr || "0.00"),
-                price: t.usd_price || 0,
-                pct: t.price_change_24h || 0,
-                balance: Number(t.balance || 0),
-                isPayme: false
-              };
-              const id = t.coin_id || (t.symbol ? t.symbol.toUpperCase() : (t.contract || "").slice(0,8));
-              createOrUpdateRow(id, meta);
-            });
-
-            writeStoredTokens(stored);
-            // recompute totals by calling price updater
-            const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
-            await updatePricesAndDisplay(activeNet);
-            return; // done
-          }
-        } catch(e){
-          console.warn("Backend balance approach failed, falling back to on-chain provider per-token", e);
-        }
-
-        // 2) Fallback: check on-chain individually in the browser (original logic preserved)
-        for(const id of ids){
-          try {
-            // Native coin balance
-            if(id === "ethereum"){
-              try {
-                const balWei = await PROVIDERS.eth.getBalance(walletAddress);
-                const bal = Number(ethers.formatEther(balWei));
-                stored.mainnet = stored.mainnet || {};
-                stored.mainnet[id] = stored.mainnet[id] || {};
-                stored.mainnet[id].balance = bal;
-                writeStoredTokens(stored);
-                const existing = tokenRows[id];
-                const price = existing ? Number(existing.meta.price || 0) : (stored.mainnet[id].price || 0);
-                const pct = existing ? Number(existing.meta.pct || 0) : 0;
-                createOrUpdateRow(id, {
-                  symbol: existing ? existing.meta.symbol : id.toUpperCase(),
-                  name: existing ? existing.meta.name : id,
-                  image: existing ? existing.meta.image : null,
-                  priceStr: fmt(price),
-                  price,
-                  pct,
-                  balance: bal,
-                  isPayme:false
-                });
-              } catch(e){ console.warn("native eth balance failed", e); }
-              continue;
-            }
-
-            // ERC20-like token: find contract and query
-            const found = await findContractForCoinId(id);
-            if(found && found.contract){
-              const contractAddr = found.contract;
-              // pick provider based on platform
-              let provider = PROVIDERS.eth;
-              const pf = found.platform || "";
-              if(pf.includes("binance")) provider = PROVIDERS.bsc;
-              else if(pf.includes("polygon") || pf.includes("matic")) provider = PROVIDERS.polygon;
-              else if(pf.includes("avalanche") || pf.includes("avax")) provider = PROVIDERS.avax;
-              else if(pf.includes("arbitrum")) provider = PROVIDERS.arbitrum;
-              else if(pf.includes("optimism")) provider = PROVIDERS.optimism;
-              else if(pf.includes("fantom")) provider = PROVIDERS.fantom;
-
-              const tokenContract = new ethers.Contract(contractAddr, ERC20_ABI, provider);
-              let decimals = 18;
-              try { decimals = await tokenContract.decimals(); } catch(e){ decimals = 18; }
-              let raw = await tokenContract.balanceOf(walletAddress);
-              const bal = Number(ethers.formatUnits(raw, decimals));
-
-              stored.mainnet = stored.mainnet || {};
-              stored.mainnet[id] = stored.mainnet[id] || {};
-              stored.mainnet[id].balance = bal;
-              writeStoredTokens(stored);
-
-              const existing = tokenRows[id];
-              const price = existing ? Number(existing.meta.price || 0) : (stored.mainnet[id].price || 0);
-              const pct = existing ? Number(existing.meta.pct || 0) : 0;
-              createOrUpdateRow(id, {
-                symbol: existing ? existing.meta.symbol : id.toUpperCase(),
-                name: existing ? existing.meta.name : id,
-                image: existing ? existing.meta.image : null,
-                priceStr: fmt(price),
-                price,
-                pct,
-                balance: bal,
-                isPayme:false
-              });
-            } else {
-              // no contract found: skip
-            }
-          } catch(e){
-            console.warn("on-chain token balance failed for", id, e);
-          }
-        }
-
-        // recompute totals
-        const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
-        await updatePricesAndDisplay(activeNet);
-
-      } else {
-        // testnet: balances come from stored.testnet; no on-chain checks here
-        // (kept as-is)
-        // recompute totals
-        const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
-        await updatePricesAndDisplay(activeNet);
-      }
-    }
-
-    /***********************
-     * Render initial + intervals
-     ***********************/
-    async function renderInitial(net){
-      await updatePricesAndDisplay(net);
-      if(walletAddress) {
-        updateOnChainBalances(net).catch(()=>{});
-      }
-    }
-
-    // initial render default mainnet
-    renderInitial("mainnet");
-
-    // Fast price updates (every 3s)
-    setInterval(async ()=>{
-      const mainActive = document.getElementById("mainBtn").classList.contains("active");
-      const net = mainActive ? "mainnet" : "testnet";
-      await updatePricesAndDisplay(net);
-    }, 3000);
-
-    // On-chain balance updates every 8s
-    setInterval(async ()=>{
-      const mainActive = document.getElementById("mainBtn").classList.contains("active");
-      if(mainActive && walletAddress){
-        await updateOnChainBalances("mainnet");
-      }
-    }, 8000);
-
-    // Network switching
-    function switchNetwork(net){
-      document.getElementById("mainBtn").classList.remove("active");
-      document.getElementById("testBtn").classList.remove("active");
-      if(net==="mainnet"){document.getElementById("mainBtn").classList.add("active");}
-      else{document.getElementById("testBtn").classList.add("active");}
-      renderInitial(net);
-    }
-
-    // Add token flow (CoinGecko) — NO BALANCE PROMPT, uses backend search-first
-    async function onAddTokenClicked(){
-      const status = document.getElementById("addTokenStatus");
-      status.innerText = "";
-      try {
-        const q = prompt("Search token on CoinGecko by name or symbol (e.g. 'uniswap' or 'uni'):");
-        if(!q) return;
-        status.innerText = "Searching CoinGecko...";
-        const sjson = await searchCoinGecko(q); // uses backend first
-        const coins = sjson.coins || [];
-        if(coins.length === 0){
-          alert("No matching token found on CoinGecko.");
-          status.innerText = "";
-          return;
-        }
-        let choices = coins.slice(0,6).map((c,i)=>`${i+1}. ${c.name} (${c.symbol}) : id=${c.id}`).join("\n");
-        let pick = prompt("Choose a token by number (or press Cancel to pick first):\n\n" + choices, "1");
-        let idx = 0;
-        if(pick){
-          const p = parseInt(pick,10);
-          if(!isNaN(p) && p >= 1 && p <= Math.min(6, coins.length)) idx = p-1;
-        }
-        const coin = coins[idx];
-        if(!coin || !coin.id){
-          alert("Invalid selection.");
-          status.innerText = "";
-          return;
-        }
-        const stored = readStoredTokens();
-        stored.mainnet = stored.mainnet || {};
-        stored.mainnet[coin.id] = {
-          symbol: coin.symbol.toUpperCase(),
-          name: coin.name,
-          balance: stored.mainnet && stored.mainnet[coin.id] ? stored.mainnet[coin.id].balance || 0 : 0
-        };
-        writeStoredTokens(stored);
-        status.innerText = `Added ${coin.symbol.toUpperCase()} — balance will be detected from wallet (if connected).`;
-        await updatePricesAndDisplay("mainnet");
-        if(walletAddress) updateOnChainBalances("mainnet").catch(()=>{});
-      } catch (err) {
-        console.error("Add token error", err);
-        alert("Failed to add token.");
-        document.getElementById("addTokenStatus").innerText = "";
-      }
-    }
-
-    window.switchNetwork = switchNetwork;
-    window.onAddTokenClicked = onAddTokenClicked;
-  </script>
-</body>
-</html>
+          for
