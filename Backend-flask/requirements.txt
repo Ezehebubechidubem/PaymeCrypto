@@ -2,29 +2,17 @@
 Flask==2.2.5
 Flask-Cors==3.0.10
 gunicorn==21.2.0
-Cython>=0.29.36
+Cython==0.29.36
 
-# EVM support (Ethereum, BSC, Polygon, Avalanche, etc.)
+# EVM support
 web3==6.5.0
 eth-account==0.9.0
 
-# Config + utilities
+# Utilities
 requests==2.31.0
 pyyaml==6.0
-
-# Async + performance (optional but useful for scaling)
-aiohttp==3.8.5
-httpx==0.25.0
-
-# For handling .env secrets if needed
 python-dotenv==1.0.0
 
-# Non-EVM chains (install only if you plan to use them immediately)
-# Solana
-solana==0.30.2
-# TON
-tonsdk==1.0.13
-# Sui (community sdk, still evolving)
-pysui==0.50.1
-# Aptos (optional)
-aptos-sdk==0.3.0
+# Async
+aiohttp==3.8.5
+httpx==0.25.0
