@@ -1,155 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Token Details — Payme Crypto</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Token — Payme Crypto</title>
   <style>
-    body{font-family: "Segoe UI",sans-serif;background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;min-height:100vh;padding:20px}
-    .card{background:rgba(255,255,255,0.05);border-radius:12px;padding:18px;max-width:720px;margin:0 auto}
-    .row{display:flex;justify-content:space-between;align-items:center;gap:12px}
-    .muted{color:rgba(255,255,255,0.65)}
-    .logo{width:48px;height:48px;border-radius:50%;object-fit:cover;margin-right:12px}
-    .back{display:inline-block;margin-bottom:12px;color:#00ffae;text-decoration:none;font-weight:700}
-    .up{color:#9fe6c8}.down{color:#ff7b7b}
+    body { margin:0; font-family:"Segoe UI",sans-serif; background:linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#fff; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+    .card{ background:rgba(255,255,255,0.05); border-radius:16px; padding:20px; width:100%; max-width:640px; box-shadow:0 6px 20px rgba(0,0,0,0.4);}
+    .row { display:flex; gap:12px; align-items:center; }
+    .token-img{ width:48px;height:48px;border-radius:50%;object-fit:cover; }
+    .muted{ color: rgba(255,255,255,0.75); font-size:13px; }
+    .positive{ color:#7CFCB3; font-weight:700; }
+    .negative{ color:#ff6b6b; font-weight:700; }
+    a.button{ display:inline-block; padding:10px 14px; background:#1e90ff; color:#fff; border-radius:8px; text-decoration:none; margin-top:12px; }
   </style>
 </head>
 <body>
-  <a class="back" href="index.html">&#8592; Back</a>
-  <div class="card" id="detailCard">
-    <div id="header" class="row" style="align-items:center">
-      <div style="display:flex;align-items:center">
-        <img id="logo" class="logo" src="" alt="" style="display:none"/>
-        <div>
-          <div id="sym" style="font-weight:800;font-size:20px">TOKEN</div>
-          <div id="fullname" class="muted" style="font-size:13px">Full token name</div>
-        </div>
-      </div>
-      <div style="text-align:right">
-        <div id="usdvalue" style="font-weight:800;font-size:18px">$0.00</div>
-        <div id="pct" class="muted">0.00%</div>
+  <div class="card">
+    <div id="header" class="row">
+      <img id="logo" class="token-img" src="" alt="logo" />
+      <div>
+        <div id="title" style="font-size:20px;font-weight:800"></div>
+        <div id="subtitle" class="muted"></div>
       </div>
     </div>
 
-    <hr style="border:none;height:1px;background:rgba(255,255,255,0.04);margin:12px 0"/>
-
-    <div class="row" style="margin-bottom:8px">
-      <div class="muted">Wallet address</div>
-      <div id="addr" class="muted" style="font-family:monospace">-</div>
+    <div style="margin-top:16px">
+      <div><strong>Balance:</strong> <span id="bal">-</span></div>
+      <div><strong>USD value:</strong> $<span id="usd">-</span></div>
+      <div><strong>24h change:</strong> <span id="chg">-</span></div>
+      <div style="margin-top:8px"><strong>Contract:</strong> <span id="contract">-</span></div>
+      <div><strong>Chain:</strong> <span id="chain">-</span></div>
+      <div style="margin-top:8px"><strong>Address (this chain):</strong> <div id="addr" class="muted" style="word-break:break-all"></div></div>
     </div>
 
-    <div class="row" style="margin-bottom:8px">
-      <div class="muted">Amount</div>
-      <div id="amount" style="font-weight:800">0</div>
+    <div style="margin-top:18px">
+      <a class="button" href="dashboard.html">Back</a>
     </div>
-
-    <div class="row" style="margin-bottom:8px">
-      <div class="muted">Price (USD)</div>
-      <div id="price" class="muted">$0.00</div>
-    </div>
-
-    <div class="row" style="margin-bottom:8px">
-      <div class="muted">USD value</div>
-      <div id="value" style="font-weight:800">$0.00</div>
-    </div>
-
-    <div id="notes" style="margin-top:12px" class="muted"></div>
   </div>
 
   <script>
-    const BACKEND_URL = "https://paymecrypto-1.onrender.com"; // same backend
+    // backend link (same as dashboard)
+    const BACKEND_URL = "https://paymecrypto-1.onrender.com";
 
-    function fmt(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8}); }
+    // read selected token saved from dashboard
+    const sel = JSON.parse(localStorage.getItem("selected_token") || "null");
+    const wallet = JSON.parse(localStorage.getItem("payme_wallet") || "{}"); // keep your stored wallet obj
 
-    // parse params
-    const params = new URLSearchParams(window.location.search);
-    const key = params.get("key"); // coinId or symbol
-    const net = params.get("net") || "mainnet";
-    const chainParam = params.get("chain") || "ethereum";
-    document.getElementById("notes").innerText = `Network: ${net} • Preferred chain: ${chainParam}`;
+    async function renderTokenDetails(){
+      if(!sel){ document.getElementById("title").innerText = "No token selected"; return; }
+      const { key, meta, net } = sel;
+      // fast show previously known meta if available
+      document.getElementById("logo").src = meta.image || "";
+      document.getElementById("title").innerText = `${meta.name || key} (${meta.symbol||key})`;
+      document.getElementById("subtitle").innerText = `Network: ${net}`;
 
-    // try to get stored tokens for initial values
-    const stored = JSON.parse(localStorage.getItem("payme_tokens") || "{}");
-    let stored_meta = null;
-    if(net === "mainnet"){
-      stored_meta = (stored.mainnet && stored.mainnet[key]) ? stored.mainnet[key] : null;
-    } else {
-      stored_meta = (stored.testnet && stored.testnet[key]) ? stored.testnet[key] : null;
+      // Display a chain-aware address:
+      // if wallet contains addresses mapping (e.g. wallet.addresses.solana), use that for non-EVM chains.
+      // fallback to wallet.address (the main EVM address).
+      function chainSpecificAddress(chain){
+        // token HTML doesn't always know exact chain; infer: if key matches known testnet symbol (PYM) or net==='testnet', use wallet.address
+        // If meta provides chain property (not always), use it.
+        const tokenChain = (meta && meta.chain) ? meta.chain : (net === 'testnet' ? 'testnet' : 'ethereum');
+        const addrs = wallet && wallet.addresses ? wallet.addresses : null;
+        if(addrs && addrs[tokenChain]) return addrs[tokenChain];
+        // fallback to top-level address
+        return wallet && wallet.address ? wallet.address : "No address stored";
+      }
+
+      document.getElementById("addr").innerText = chainSpecificAddress(meta.chain || "ethereum");
+
+      // fetch live details from backend
+      try {
+        // if meta has coinGecko id (we used coin ids as keys for mainnet), call /api/balance with coin_ids
+        const payload = {
+          chain: (meta.chain && meta.chain !== "ethereum") ? meta.chain : "ethereum",
+          address: chainSpecificAddress(meta.chain || "ethereum"),
+          coin_ids: []
+        };
+        // If the key looks like a coinGecko id (has lowercase and not simple symbol), include as coin_id
+        // We'll try both: if meta && meta.isPayme => testnet entry; otherwise pass coin id if available
+        if(net === "mainnet" && key && key.indexOf(" ") === -1 && key === key.toLowerCase()){
+          payload.coin_ids = [key];
+        } else if(net === "mainnet" && meta && meta.symbol){
+          // still try coin id by symbol lookup via backend search as fallback
+          // But to keep code simple, pass empty coin_ids and rely on token entry fallback
+          payload.coin_ids = payload.coin_ids || [];
+        }
+
+        const res = await fetch(`${BACKEND_URL}/api/balance`, {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(payload)
+        });
+        const j = await res.json();
+
+        // determine best token entry from response
+        let entry = null;
+        if(Array.isArray(j.tokens) && j.tokens.length){
+          // find by coin_id matching key OR contract or symbol
+          entry = j.tokens.find(t => (t.coin_id === key) || (t.contract && meta && meta.contract && t.contract.toLowerCase() === meta.contract.toLowerCase()) || (t.symbol && t.symbol.toUpperCase() === (meta.symbol||"").toUpperCase()));
+          if(!entry) entry = j.tokens[0];
+        } else if(j.native && (meta.symbol && j.native.symbol && (j.native.symbol.toUpperCase() === (meta.symbol||"").toUpperCase() || j.native.symbol.toUpperCase().includes((meta.symbol||"").toUpperCase())))){
+          entry = { name: j.native.symbol, symbol: j.native.symbol, balance: j.native.balance, usd_price: j.native.usd_price, price_change_24h: j.native.price_change_24h };
+        }
+
+        // display result (fall back to the meta we had)
+        const bal = entry ? Number(entry.balance || 0) : (meta.balance || 0);
+        const usdVal = entry ? (Number(entry.usd_price || meta.price || 0) * bal) : ((meta.price || 0) * bal);
+        const pct = entry ? (entry.price_change_24h || meta.pct || 0) : (meta.pct || 0);
+
+        document.getElementById("bal").innerText = (bal > 0 && bal < 0.01) ? "<0.01" : fmtVisible(bal);
+        document.getElementById("usd").innerText = (usdVal > 0 && usdVal < 0.01) ? "<0.01" : (usdVal ? fmtVisible(usdVal) : "0.00");
+        const chgEl = document.getElementById("chg");
+        chgEl.innerText = (pct>=0?"+":"") + (pct||0).toFixed(2) + "%";
+        chgEl.className = pct < 0 ? "negative" : "positive";
+
+        document.getElementById("contract").innerText = (entry && entry.contract) ? entry.contract : (meta.contract || "Native");
+        document.getElementById("chain").innerText = (entry && entry.chain) ? (entry.chain || "ethereum") : (meta.chain || "ethereum");
+
+      } catch(e){
+        console.warn("token details fetch failed", e);
+        // show local meta fallback
+        document.getElementById("bal").innerText = fmtVisible(meta.balance || 0);
+        document.getElementById("usd").innerText = meta.price ? fmtVisible((meta.price||0) * (meta.balance||0)) : "0.00";
+        const pct = meta.pct || 0;
+        const chgEl = document.getElementById("chg");
+        chgEl.innerText = (pct>=0?"+":"") + (pct||0).toFixed(2) + "%";
+        chgEl.className = pct < 0 ? "negative" : "positive";
+        document.getElementById("contract").innerText = meta.contract || "Native";
+        document.getElementById("chain").innerText = meta.chain || "ethereum";
+      }
     }
 
-    (async function loadDetail(){
-      // show stored quick info if present
-      if(stored_meta){
-        document.getElementById("sym").innerText = stored_meta.symbol || key.toUpperCase();
-        document.getElementById("fullname").innerText = stored_meta.name || key;
-        document.getElementById("amount").innerText = (stored_meta.balance !== undefined) ? fmt(stored_meta.balance) + " " + (stored_meta.symbol || key.toUpperCase()) : "0";
-        if(stored_meta.image){
-          const img = document.getElementById("logo"); img.src = stored_meta.image; img.style.display = "inline-block";
-        }
-      } else {
-        document.getElementById("sym").innerText = (key || "").toUpperCase();
-        document.getElementById("fullname").innerText = "";
-      }
-      document.getElementById("addr").innerText = localStorage.getItem("payme_wallet") ? (JSON.parse(localStorage.getItem("payme_wallet")).address || "-") : "-";
-
-      // call your backend to get fresh info
+    function fmtVisible(n){
       try {
-        const body = { chain: chainParam || "ethereum", address: (JSON.parse(localStorage.getItem("payme_wallet")||"{}").address||""), coin_ids: [] };
-        // If key looks like a coingecko id (contains hyphen or lowercase letters), pass it; else pass as explicit token via contract array? We request coin_ids = [key] in most cases.
-        if(net === "mainnet"){
-          body.coin_ids = [key];
-        } else {
-          body.coin_ids = [];
-        }
-        const res = await fetch(BACKEND_URL + "/api/balance", {
-          method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body)
-        });
-        if(res.ok){
-          const js = await res.json();
-          // try to find the token entry matching key
-          let entry = null;
-          if(js.tokens && js.tokens.length>0){
-            entry = js.tokens.find(t => (t.coin_id === key) || (t.symbol && t.symbol.toUpperCase() === key.toUpperCase()) || (t.contract && t.contract.toLowerCase() === key.toLowerCase()));
-          }
-          // also consider native
-          if(!entry && js.native && (js.native.symbol && js.native.symbol.toUpperCase() === key.toUpperCase())){
-            entry = {
-              coin_id: null,
-              symbol: js.native.symbol,
-              name: js.native.symbol,
-              contract: null,
-              chain: js.chain,
-              balance: js.native.balance,
-              usd_price: js.native.usd_price,
-              price_change_24h: js.native.price_change_24h,
-              usd_value: js.native.usd_value,
-              logo: null
-            };
-          }
-          if(entry){
-            document.getElementById("sym").innerText = (entry.symbol || key || "").toUpperCase();
-            document.getElementById("fullname").innerText = entry.name || "";
-            document.getElementById("amount").innerText = fmt(entry.balance || 0) + " " + (entry.symbol || "");
-            document.getElementById("price").innerText = "$" + fmt(entry.usd_price || 0);
-            document.getElementById("value").innerText = "$" + fmt(entry.usd_value || ((entry.balance||0)*(entry.usd_price||0)));
-            const pctNode = document.getElementById("pct");
-            const pct = entry.price_change_24h || 0;
-            pctNode.innerText = (pct >= 0 ? "+" : "") + (Number(pct).toFixed(2)) + "%";
-            pctNode.className = pct >= 0 ? "up" : "down";
-            if(entry.logo){
-              const img=document.getElementById("logo"); img.src = entry.logo; img.style.display="inline-block";
-            }
-          } else {
-            // fallback: no token info returned
-            document.getElementById("notes").innerText += "\nNo token info returned from backend for this key.";
-          }
-        } else {
-          document.getElementById("notes").innerText += "\nBackend /api/balance returned error.";
-        }
-      } catch(e){
-        document.getElementById("notes").innerText += "\nError fetching detail from backend: " + (e.message||e);
-      }
-    })();
+        if(Math.abs(Number(n)) < 0.01 && Number(n) !== 0) return "<0.01";
+        return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8});
+      } catch { return String(n); }
+    }
+
+    renderTokenDetails();
   </script>
 </body>
 </html>
