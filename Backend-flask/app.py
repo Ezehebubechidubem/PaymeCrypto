@@ -633,4 +633,4 @@ if __name__ == "__main__":
         reload_rpc_config_if_changed()
     except Exception:
         app.logger.warning("Initial chain config load failed (ignored)")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
