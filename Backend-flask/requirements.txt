@@ -15,12 +15,10 @@ python-dotenv==1.0.0
 
 # Async + performance
 aiohttp==3.8.5
-httpx==0.23.1
+httpx>=0.23.0,<0.24.0
 
 # Non-EVM chains
 # Solana
 solana==0.30.2
 # TON
 tonsdk==1.0.13
-# Sui
-pysui==0.50.1
