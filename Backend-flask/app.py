@@ -542,10 +542,61 @@ def api_coins_search():
         return jsonify({"error": "search failed", "detail": str(e)}), 500
 
 
+
 @app.route("/api/balance", methods=["POST"])
 def api_balance():
     payload = request.get_json(force=True, silent=True) or {}
     chain = (payload.get("chain") or "").strip().lower()
     address = (payload.get("address") or "").strip()
     coin_ids = payload.get("coin_ids") or []
-    tokens = payload
+    tokens = payload.get("tokens") or []
+
+    if not chain or not address:
+        return jsonify({"error": "chain and address required"}), 400
+
+    result = compute_balance_for_chain(chain, address, coin_ids, tokens)
+    return jsonify(result)
+
+
+# NEW: multi-chain balance endpoint (non-destructive addition)
+@app.route("/api/balance/multi", methods=["POST"])
+def api_balance_multi():
+    """
+    POST body:
+    {
+      "addresses": { "ethereum": "0x..", "solana": "..." },
+      "coin_ids": ["ethereum","uniswap"],
+      "tokens": [ {"chain":"ethereum","contract":"0x..."}, ... ]  // optional global tokens
+    }
+    Returns: mapping chain->balance-result (same shape as /api/balance response)
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    addresses = payload.get("addresses") or {}
+    coin_ids = payload.get("coin_ids") or []
+    tokens = payload.get("tokens") or []
+
+    if not isinstance(addresses, dict) or len(addresses) == 0:
+        return jsonify({"error": "addresses mapping required"}), 400
+
+    out = {}
+    for chain_key, addr in addresses.items():
+        try:
+            if not addr:
+                out[chain_key] = {"error": "address empty"}
+                continue
+            # For per-chain tokens you could accept payload["tokens_by_chain"], but we reuse global tokens
+            res = compute_balance_for_chain(chain_key.lower(), addr, coin_ids, tokens)
+            out[chain_key] = res
+        except Exception as e:
+            app.logger.exception("multi balance compute failed for %s", chain_key)
+            out[chain_key] = {"error": str(e)}
+    return jsonify(out)
+
+if __name__ == "__main__":
+    # try initial chain config load
+    try:
+        reload_rpc_config_if_changed()
+    except Exception:
+        app.logger.warning("Initial chain config load failed (ignored)")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+
