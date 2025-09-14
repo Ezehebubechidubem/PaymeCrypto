@@ -529,3 +529,281 @@
         const keys = Object.keys(t);
         if(keys.length === 0){
           // compute fallback total from tokenRows testnet entries if
+       // compute fallback total from tokenRows testnet entries if present
+          let fallback = 0;
+          for(const k of Object.keys(tokenRows)){
+            if(k === 'PYM' || (t && t[k])) {
+              const meta = tokenRows[k] && tokenRows[k].meta ? tokenRows[k].meta : null;
+              if(meta) fallback += (Number(meta.balance||0) * Number(meta.price||0));
+            }
+          }
+          if(fallback > 0 && fallback < 0.01) document.getElementById("balance").innerText = `<$0.01 (Testnet)`;
+          else document.getElementById("balance").innerText = `$${fmt(fallback)} (Testnet)`;
+          return;
+        }
+
+        let total = 0;
+        for(const k of keys){
+          const item = t[k];
+          const balStored = Number(item.balance || 0);
+          const prevMeta = tokenRows[k] ? tokenRows[k].meta : {};
+          const price = (k === "PYM") ? 0.5 : (item.price || prevMeta.price || 0);
+          const meta = {
+            symbol: k.toUpperCase(),
+            name: item.name || (k === "PYM" ? "Testnet Token" : k),
+            image: null,
+            priceStr: fmt(price),
+            price,
+            pct: prevMeta ? (prevMeta.pct || 0) : 0,
+            balance: typeof item.balance !== 'undefined' ? balStored : (prevMeta.balance || 0),
+            isPayme: (k === "PYM")
+          };
+          createOrUpdateRow(k, meta);
+          total += meta.balance * price;
+        }
+        if(total > 0 && total < 0.01) document.getElementById("balance").innerText = `<$0.01 (Testnet)`;
+        else document.getElementById("balance").innerText = `$${fmt(total)} (Testnet)`;
+      }
+    }
+
+    /***********************
+     * On-chain balance synchronization
+     * Prefer backend call; fallback to in-browser provider calls
+     ***********************/
+    async function updateOnChainBalances(net){
+      const stored = readStoredTokens();
+      if(net === 'mainnet'){
+        const ids = getMainnetIds(stored);
+        if(!walletAddress) return;
+
+        // 1) Prefer backend consolidated balance call (fast & avoids RPC keys in browser)
+        try {
+          const backendRes = await fetchBalancesFromBackend("ethereum", walletAddress, ids);
+          if(backendRes){
+            // native
+            if(backendRes.native){
+              // map native coin id (attempt to find "ethereum")
+              // we'll store under "ethereum" if it exists in ids
+              if(ids.includes("ethereum")){
+                stored.mainnet = stored.mainnet || {};
+                stored.mainnet["ethereum"] = stored.mainnet["ethereum"] || {};
+                stored.mainnet["ethereum"].balance = Number(backendRes.native.balance || 0);
+              }
+            }
+            // tokens
+            (backendRes.tokens || []).forEach(t => {
+              // coin_id may be present (preferred)
+              const key = t.coin_id || (t.symbol ? t.symbol.toLowerCase() : null) || t.contract || ("c_"+(t.contract||"").slice(0,6));
+              // store under mainnet using coin_id where possible
+              if(t.coin_id){
+                stored.mainnet = stored.mainnet || {};
+                stored.mainnet[t.coin_id] = stored.mainnet[t.coin_id] || {};
+                stored.mainnet[t.coin_id].balance = Number(t.balance || 0);
+                stored.mainnet[t.coin_id].symbol = (t.symbol || stored.mainnet[t.coin_id].symbol || "").toUpperCase();
+                stored.mainnet[t.coin_id].name = t.name || stored.mainnet[t.coin_id].name;
+              } else {
+                // fallback: attempt to find matching stored entry by symbol
+                // do nothing complicated — keep stored as-is
+              }
+
+              // update UI row
+              const meta = {
+                symbol: (t.symbol || "").toUpperCase(),
+                name: t.name || "",
+                image: t.logo || null,
+                priceStr: t.usd_price ? fmt(t.usd_price) : (t.priceStr || "0.00"),
+                price: t.usd_price || 0,
+                pct: t.price_change_24h || 0,
+                balance: Number(t.balance || 0),
+                isPayme: false
+              };
+              const id = t.coin_id || (t.symbol ? t.symbol.toUpperCase() : (t.contract || "").slice(0,8));
+              createOrUpdateRow(id, meta);
+            });
+
+            writeStoredTokens(stored);
+            // recompute totals by calling price updater
+            const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
+            await updatePricesAndDisplay(activeNet);
+            return; // done
+          }
+        } catch(e){
+          console.warn("Backend balance approach failed, falling back to on-chain provider per-token", e);
+        }
+
+        // 2) Fallback: check on-chain individually in the browser (original logic preserved)
+        for(const id of ids){
+          try {
+            // Native coin balance
+            if(id === "ethereum"){
+              try {
+                const balWei = await PROVIDERS.eth.getBalance(walletAddress);
+                const bal = Number(ethers.formatEther(balWei));
+                stored.mainnet = stored.mainnet || {};
+                stored.mainnet[id] = stored.mainnet[id] || {};
+                stored.mainnet[id].balance = bal;
+                writeStoredTokens(stored);
+                const existing = tokenRows[id];
+                const price = existing ? Number(existing.meta.price || 0) : (stored.mainnet[id].price || 0);
+                const pct = existing ? Number(existing.meta.pct || 0) : 0;
+                createOrUpdateRow(id, {
+                  symbol: existing ? existing.meta.symbol : id.toUpperCase(),
+                  name: existing ? existing.meta.name : id,
+                  image: existing ? existing.meta.image : null,
+                  priceStr: fmt(price),
+                  price,
+                  pct,
+                  balance: bal,
+                  isPayme:false
+                });
+              } catch(e){ console.warn("native eth balance failed", e); }
+              continue;
+            }
+
+            // ERC20-like token: find contract and query
+            const found = await findContractForCoinId(id);
+            if(found && found.contract){
+              const contractAddr = found.contract;
+              // pick provider based on platform
+              let provider = PROVIDERS.eth;
+              const pf = found.platform || "";
+              if(pf.includes("binance")) provider = PROVIDERS.bsc;
+              else if(pf.includes("polygon") || pf.includes("matic")) provider = PROVIDERS.polygon;
+              else if(pf.includes("avalanche") || pf.includes("avax")) provider = PROVIDERS.avax;
+              else if(pf.includes("arbitrum")) provider = PROVIDERS.arbitrum;
+              else if(pf.includes("optimism")) provider = PROVIDERS.optimism;
+              else if(pf.includes("fantom")) provider = PROVIDERS.fantom;
+
+              const tokenContract = new ethers.Contract(contractAddr, ERC20_ABI, provider);
+              let decimals = 18;
+              try { decimals = await tokenContract.decimals(); } catch(e){ decimals = 18; }
+              let raw = await tokenContract.balanceOf(walletAddress);
+              const bal = Number(ethers.formatUnits(raw, decimals));
+
+              stored.mainnet = stored.mainnet || {};
+              stored.mainnet[id] = stored.mainnet[id] || {};
+              stored.mainnet[id].balance = bal;
+              writeStoredTokens(stored);
+
+              const existing = tokenRows[id];
+              const price = existing ? Number(existing.meta.price || 0) : (stored.mainnet[id].price || 0);
+              const pct = existing ? Number(existing.meta.pct || 0) : 0;
+              createOrUpdateRow(id, {
+                symbol: existing ? existing.meta.symbol : id.toUpperCase(),
+                name: existing ? existing.meta.name : id,
+                image: existing ? existing.meta.image : null,
+                priceStr: fmt(price),
+                price,
+                pct,
+                balance: bal,
+                isPayme:false
+              });
+            } else {
+              // no contract found: skip
+            }
+          } catch(e){
+            console.warn("on-chain token balance failed for", id, e);
+          }
+        }
+
+        // recompute totals
+        const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
+        await updatePricesAndDisplay(activeNet);
+
+      } else {
+        // testnet: balances come from stored.testnet; no on-chain checks here
+        // (kept as-is)
+        // recompute totals
+        const activeNet = document.getElementById("mainBtn").classList.contains("active") ? 'mainnet' : 'testnet';
+        await updatePricesAndDisplay(activeNet);
+      }
+    }
+
+    /***********************
+     * Render initial + intervals
+     ***********************/
+    async function renderInitial(net){
+      await updatePricesAndDisplay(net);
+      if(walletAddress) {
+        updateOnChainBalances(net).catch(()=>{});
+      }
+    }
+
+    // initial render default mainnet
+    renderInitial("mainnet");
+
+    // Fast price updates (every 3s)
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      const net = mainActive ? "mainnet" : "testnet";
+      await updatePricesAndDisplay(net);
+    }, 3000);
+
+    // On-chain balance updates every 8s
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      if(mainActive && walletAddress){
+        await updateOnChainBalances("mainnet");
+      }
+    }, 8000);
+
+    // Network switching
+    function switchNetwork(net){
+      document.getElementById("mainBtn").classList.remove("active");
+      document.getElementById("testBtn").classList.remove("active");
+      if(net==="mainnet"){document.getElementById("mainBtn").classList.add("active");}
+      else{document.getElementById("testBtn").classList.add("active");}
+      renderInitial(net);
+    }
+
+    // Add token flow (CoinGecko) — NO BALANCE PROMPT, uses backend search-first
+    async function onAddTokenClicked(){
+      const status = document.getElementById("addTokenStatus");
+      status.innerText = "";
+      try {
+        const q = prompt("Search token on CoinGecko by name or symbol (e.g. 'uniswap' or 'uni'):");
+        if(!q) return;
+        status.innerText = "Searching CoinGecko...";
+        const sjson = await searchCoinGecko(q); // uses backend first
+        const coins = sjson.coins || [];
+        if(coins.length === 0){
+          alert("No matching token found on CoinGecko.");
+          status.innerText = "";
+          return;
+        }
+        let choices = coins.slice(0,6).map((c,i)=>`${i+1}. ${c.name} (${c.symbol}) : id=${c.id}`).join("\n");
+        let pick = prompt("Choose a token by number (or press Cancel to pick first):\n\n" + choices, "1");
+        let idx = 0;
+        if(pick){
+          const p = parseInt(pick,10);
+          if(!isNaN(p) && p >= 1 && p <= Math.min(6, coins.length)) idx = p-1;
+        }
+        const coin = coins[idx];
+        if(!coin || !coin.id){
+          alert("Invalid selection.");
+          status.innerText = "";
+          return;
+        }
+        const stored = readStoredTokens();
+        stored.mainnet = stored.mainnet || {};
+        stored.mainnet[coin.id] = {
+          symbol: coin.symbol.toUpperCase(),
+          name: coin.name,
+          balance: stored.mainnet && stored.mainnet[coin.id] ? stored.mainnet[coin.id].balance || 0 : 0
+        };
+        writeStoredTokens(stored);
+        status.innerText = `Added ${coin.symbol.toUpperCase()} — balance will be detected from wallet (if connected).`;
+        await updatePricesAndDisplay("mainnet");
+        if(walletAddress) updateOnChainBalances("mainnet").catch(()=>{});
+      } catch (err) {
+        console.error("Add token error", err);
+        alert("Failed to add token.");
+        document.getElementById("addTokenStatus").innerText = "";
+      }
+    }
+
+    window.switchNetwork = switchNetwork;
+    window.onAddTokenClicked = onAddTokenClicked;
+  </script>
+</body>
+</html>
