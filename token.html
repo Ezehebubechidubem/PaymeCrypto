@@ -1,146 +1,173 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Token — Payme Crypto</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.6.0/dist/ethers.umd.min.js"></script>
+
   <style>
-    body { margin:0; font-family:"Segoe UI",sans-serif; background:linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#fff; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
-    .card{ background:rgba(255,255,255,0.05); border-radius:16px; padding:20px; width:100%; max-width:640px; box-shadow:0 6px 20px rgba(0,0,0,0.4);}
-    .row { display:flex; gap:12px; align-items:center; }
-    .token-img{ width:48px;height:48px;border-radius:50%;object-fit:cover; }
-    .muted{ color: rgba(255,255,255,0.75); font-size:13px; }
-    .positive{ color:#7CFCB3; font-weight:700; }
-    .negative{ color:#ff6b6b; font-weight:700; }
-    a.button{ display:inline-block; padding:10px 14px; background:#1e90ff; color:#fff; border-radius:8px; text-decoration:none; margin-top:12px; }
+    body { margin:0; font-family:"Segoe UI",sans-serif; background:linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#fff; padding:20px; display:flex; justify-content:center; }
+    .card { background: rgba(255,255,255,0.05); border-radius:12px; padding:18px; width:100%; max-width:720px; box-shadow:0 8px 30px rgba(0,0,0,0.4); }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .left { display:flex; gap:12px; align-items:center; }
+    .token-img { width:48px; height:48px; border-radius:50%; object-fit:cover; }
+    h2 { margin:0; color:#00ffae; font-size:20px; }
+    .muted { color:rgba(255,255,255,0.65); font-size:14px; }
+    .row { display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+    .big { font-size:28px; font-weight:800; color:#fff; }
+    .price { color:#00ffae; font-weight:700; font-size:18px; }
+    .pct.up { background:#9fe6c8; color:#003018; padding:4px 8px; border-radius:8px; margin-left:8px;}
+    .pct.down { background:#ffd6d6; color:#4d0b00; padding:4px 8px; border-radius:8px; margin-left:8px;}
+    .back { background:transparent; border:1px solid rgba(255,255,255,0.06); color:#fff; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .info { margin-top:14px; padding:12px; border-radius:8px; background:rgba(255,255,255,0.02); }
+    .copy { margin-left:8px; padding:6px 8px; border-radius:6px; background:#1e90ff; border:none; cursor:pointer; color:#fff; font-weight:700;}
+    a.remote { color:#00d27a; text-decoration:none; font-weight:700; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div id="header" class="row">
-      <img id="logo" class="token-img" src="" alt="logo" />
+    <div class="top">
+      <div class="left">
+        <img id="logo" class="token-img" src="" alt="logo">
+        <div>
+          <h2 id="title">TOKEN</h2>
+          <div id="subtitle" class="muted">Symbol • Network</div>
+        </div>
+      </div>
       <div>
-        <div id="title" style="font-size:20px;font-weight:800"></div>
-        <div id="subtitle" class="muted"></div>
+        <button id="back" class="back">Back</button>
       </div>
     </div>
 
-    <div style="margin-top:16px">
-      <div><strong>Balance:</strong> <span id="bal">-</span></div>
-      <div><strong>USD value:</strong> $<span id="usd">-</span></div>
-      <div><strong>24h change:</strong> <span id="chg">-</span></div>
-      <div style="margin-top:8px"><strong>Contract:</strong> <span id="contract">-</span></div>
-      <div><strong>Chain:</strong> <span id="chain">-</span></div>
-      <div style="margin-top:8px"><strong>Address (this chain):</strong> <div id="addr" class="muted" style="word-break:break-all"></div></div>
+    <div class="row">
+      <div>
+        <div class="muted">Holdings</div>
+        <div id="holdings" class="big">0.0000</div>
+      </div>
+      <div style="text-align:right">
+        <div class="muted">Price (USD)</div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;">
+          <div id="price" class="price">$0.00</div>
+          <div id="pct" class="pct up">+0.00%</div>
+        </div>
+      </div>
     </div>
 
-    <div style="margin-top:18px">
-      <a class="button" href="testing.html">Back</a>
+    <div class="info" id="info">
+      Loading...
     </div>
   </div>
 
   <script>
-    // backend link (same as dashboard)
-    const BACKEND_URL = "https://paymecrypto-1.onrender.com";
+    const API_BASE = "https://paymecrypto-1.onrender.com"; // change if you host elsewhere
+    const STORAGE_WALLET = "payme_wallet";
+    const STORAGE_TOKENS = "payme_tokens";
 
-    // read selected token saved from dashboard
-    const sel = JSON.parse(localStorage.getItem("selected_token") || "null");
-    const wallet = JSON.parse(localStorage.getItem("payme_wallet") || "{}"); // keep your stored wallet obj
+    function fmt(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8}); }
 
-    async function renderTokenDetails(){
-      if(!sel){ document.getElementById("title").innerText = "No token selected"; return; }
-      const { key, meta, net } = sel;
-      // fast show previously known meta if available
-      document.getElementById("logo").src = meta.image || "";
-      document.getElementById("title").innerText = `${meta.name || key} (${meta.symbol||key})`;
-      document.getElementById("subtitle").innerText = `Network: ${net}`;
+    // parse query param or last meta
+    const qs = new URLSearchParams(window.location.search);
+    const coin = qs.get('coin') || null;
+    const lastMeta = JSON.parse(localStorage.getItem('payme_last_token_meta') || 'null');
 
-      // Display a chain-aware address:
-      // if wallet contains addresses mapping (e.g. wallet.addresses.solana), use that for non-EVM chains.
-      // fallback to wallet.address (the main EVM address).
-      function chainSpecificAddress(chain){
-        // token HTML doesn't always know exact chain; infer: if key matches known testnet symbol (PYM) or net==='testnet', use wallet.address
-        // If meta provides chain property (not always), use it.
-        const tokenChain = (meta && meta.chain) ? meta.chain : (net === 'testnet' ? 'testnet' : 'ethereum');
-        const addrs = wallet && wallet.addresses ? wallet.addresses : null;
-        if(addrs && addrs[tokenChain]) return addrs[tokenChain];
-        // fallback to top-level address
-        return wallet && wallet.address ? wallet.address : "No address stored";
+    let coinId = coin || (lastMeta && lastMeta.key) || null;
+    let meta = lastMeta || { symbol: coinId ? coinId.toUpperCase() : "TOKEN", name: coinId };
+
+    // elements
+    const logo = document.getElementById('logo');
+    const title = document.getElementById('title');
+    const subtitle = document.getElementById('subtitle');
+    const holdings = document.getElementById('holdings');
+    const priceEl = document.getElementById('price');
+    const pctEl = document.getElementById('pct');
+    const info = document.getElementById('info');
+    const back = document.getElementById('back');
+
+    back.addEventListener('click', ()=> window.history.back());
+
+    async function fetchMarket(){
+      if(!coinId) {
+        info.innerText = "No token selected.";
+        return;
       }
-
-      document.getElementById("addr").innerText = chainSpecificAddress(meta.chain || "ethereum");
-
-      // fetch live details from backend
       try {
-        // if meta has coinGecko id (we used coin ids as keys for mainnet), call /api/balance with coin_ids
-        const payload = {
-          chain: (meta.chain && meta.chain !== "ethereum") ? meta.chain : "ethereum",
-          address: chainSpecificAddress(meta.chain || "ethereum"),
-          coin_ids: []
-        };
-        // If the key looks like a coinGecko id (has lowercase and not simple symbol), include as coin_id
-        // We'll try both: if meta && meta.isPayme => testnet entry; otherwise pass coin id if available
-        if(net === "mainnet" && key && key.indexOf(" ") === -1 && key === key.toLowerCase()){
-          payload.coin_ids = [key];
-        } else if(net === "mainnet" && meta && meta.symbol){
-          // still try coin id by symbol lookup via backend search as fallback
-          // But to keep code simple, pass empty coin_ids and rely on token entry fallback
-          payload.coin_ids = payload.coin_ids || [];
+        // fetch markets via backend
+        const res = await fetch(`${API_BASE}/api/coins/markets?vs_currency=usd&ids=${encodeURIComponent(coinId)}&price_change_percentage=24h`);
+        const arr = await res.json();
+        const m = Array.isArray(arr) && arr.length ? arr[0] : null;
+
+        if(m){
+          logo.src = m.image || "";
+          title.innerText = (m.name || coinId).toUpperCase();
+          subtitle.innerText = `${(m.symbol||coinId).toUpperCase()} • ${m.symbol ? "Mainnet" : ""}`;
+          priceEl.innerText = `$${fmt(Number(m.current_price || 0))}`;
+          const pct = Number(m.price_change_percentage_24h || 0);
+          pctEl.innerText = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+          pctEl.className = "pct " + (pct >= 0 ? "up" : "down");
+        } else {
+          // fallback meta
+          logo.style.display = 'none';
+          title.innerText = (meta.name || coinId);
+          subtitle.innerText = meta.symbol ? meta.symbol.toUpperCase() : coinId;
         }
 
-        const res = await fetch(`${BACKEND_URL}/api/balance`, {
+        // now fetch on-chain balance via backend (uses platform detection)
+        const storedWallet = JSON.parse(localStorage.getItem(STORAGE_WALLET) || "{}");
+        const address = storedWallet && storedWallet.address ? storedWallet.address : null;
+        if(!address){
+          info.innerHTML = `<div>No wallet connected. Connect a wallet (import passphrase) to view on-chain balance.</div>`;
+          holdings.innerText = "0.0000";
+          return;
+        }
+        const body = {
+          chain: "ethereum",
+          address,
+          coin_ids: [coinId]
+        };
+        const r2 = await fetch(`${API_BASE}/api/balance`, {
           method: "POST",
           headers: {"Content-Type":"application/json"},
-          body: JSON.stringify(payload)
+          body: JSON.stringify(body)
         });
-        const j = await res.json();
-
-        // determine best token entry from response
-        let entry = null;
+        const j = await r2.json();
+        // j.tokens array contains token info for coinId
+        let tk = null;
         if(Array.isArray(j.tokens) && j.tokens.length){
-          // find by coin_id matching key OR contract or symbol
-          entry = j.tokens.find(t => (t.coin_id === key) || (t.contract && meta && meta.contract && t.contract.toLowerCase() === meta.contract.toLowerCase()) || (t.symbol && t.symbol.toUpperCase() === (meta.symbol||"").toUpperCase()));
-          if(!entry) entry = j.tokens[0];
-        } else if(j.native && (meta.symbol && j.native.symbol && (j.native.symbol.toUpperCase() === (meta.symbol||"").toUpperCase() || j.native.symbol.toUpperCase().includes((meta.symbol||"").toUpperCase())))){
-          entry = { name: j.native.symbol, symbol: j.native.symbol, balance: j.native.balance, usd_price: j.native.usd_price, price_change_24h: j.native.price_change_24h };
+          tk = j.tokens.find(t => t.coin_id === coinId) || j.tokens[0];
+        }
+        if(tk){
+          holdings.innerText = `${fmt(Number(tk.balance || 0))} ${ (tk.symbol || meta.symbol || '').toUpperCase() }`;
+          // price already shown from markets; but ensure consistency
+          if(tk.usd_price) priceEl.innerText = `$${fmt(Number(tk.usd_price || 0))}`;
+          const pct = Number(tk.price_change_24h || 0);
+          pctEl.innerText = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+          pctEl.className = "pct " + (pct >= 0 ? "up" : "down");
+          info.innerHTML = `
+            <div><strong>Contract:</strong> ${tk.contract || "—"}</div>
+            <div style="margin-top:8px"><strong>Chain:</strong> ${tk.chain || "Unknown (CoinGecko)"} </div>
+            <div style="margin-top:8px"><strong>USD Value:</strong> $${fmt(Number(tk.usd_value || 0))}</div>
+            <div style="margin-top:8px"><strong>Wallet Address:</strong> <span style="font-family:monospace">${address}</span>
+              <button class="copy" id="copyAddr">Copy</button>
+            </div>
+            <div style="margin-top:8px"><a class="remote" target="_blank" href="https://www.coingecko.com/en/coins/${encodeURIComponent(coinId)}">View on CoinGecko</a></div>
+          `;
+          document.getElementById('copyAddr').addEventListener('click', ()=> {
+            navigator.clipboard && navigator.clipboard.writeText(address);
+            alert('Address copied');
+          });
+        } else {
+          info.innerHTML = `<div>No on-chain data returned for this token. It may be a non-EVM token or unsupported by backend.</div>`;
         }
 
-        // display result (fall back to the meta we had)
-        const bal = entry ? Number(entry.balance || 0) : (meta.balance || 0);
-        const usdVal = entry ? (Number(entry.usd_price || meta.price || 0) * bal) : ((meta.price || 0) * bal);
-        const pct = entry ? (entry.price_change_24h || meta.pct || 0) : (meta.pct || 0);
-
-        document.getElementById("bal").innerText = (bal > 0 && bal < 0.01) ? "<0.01" : fmtVisible(bal);
-        document.getElementById("usd").innerText = (usdVal > 0 && usdVal < 0.01) ? "<0.01" : (usdVal ? fmtVisible(usdVal) : "0.00");
-        const chgEl = document.getElementById("chg");
-        chgEl.innerText = (pct>=0?"+":"") + (pct||0).toFixed(2) + "%";
-        chgEl.className = pct < 0 ? "negative" : "positive";
-
-        document.getElementById("contract").innerText = (entry && entry.contract) ? entry.contract : (meta.contract || "Native");
-        document.getElementById("chain").innerText = (entry && entry.chain) ? (entry.chain || "ethereum") : (meta.chain || "ethereum");
-
       } catch(e){
-        console.warn("token details fetch failed", e);
-        // show local meta fallback
-        document.getElementById("bal").innerText = fmtVisible(meta.balance || 0);
-        document.getElementById("usd").innerText = meta.price ? fmtVisible((meta.price||0) * (meta.balance||0)) : "0.00";
-        const pct = meta.pct || 0;
-        const chgEl = document.getElementById("chg");
-        chgEl.innerText = (pct>=0?"+":"") + (pct||0).toFixed(2) + "%";
-        chgEl.className = pct < 0 ? "negative" : "positive";
-        document.getElementById("contract").innerText = meta.contract || "Native";
-        document.getElementById("chain").innerText = meta.chain || "ethereum";
+        console.error(e);
+        info.innerText = "Failed to load token data.";
       }
     }
 
-    function fmtVisible(n){
-      try {
-        if(Math.abs(Number(n)) < 0.01 && Number(n) !== 0) return "<0.01";
-        return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8});
-      } catch { return String(n); }
-    }
-
-    renderTokenDetails();
+    fetchMarket();
   </script>
 </body>
 </html>
