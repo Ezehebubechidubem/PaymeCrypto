@@ -463,6 +463,7 @@
     }
 
     // add token flow using backend search
+    // add token flow using backend search
     async function onAddTokenClicked(){
       const status = document.getElementById("addTokenStatus");
       status.innerText = "";
@@ -484,4 +485,72 @@
         let idx = 0;
         if(pick){
           const p = parseInt(pick,10);
-          if(!isN
+          if(!isNaN(p) && p >= 1 && p <= Math.min(6, coins.length)) idx = p-1;
+        }
+        const coin = coins[idx];
+        if(!coin || !coin.id){ alert("Invalid selection."); status.innerText = ""; return; }
+
+        const stored = readStoredTokens();
+        stored.mainnet = stored.mainnet || {};
+        stored.mainnet[coin.id] = {
+          symbol: coin.symbol.toUpperCase(),
+          name: coin.name,
+          balance: stored.mainnet && stored.mainnet[coin.id] ? stored.mainnet[coin.id].balance || 0 : 0,
+          image: coin.thumb || null
+        };
+        writeStoredTokens(stored);
+        status.innerText = `Added ${coin.symbol.toUpperCase()} — balance will be detected from wallet (if connected).`;
+        // update display quickly
+        await updatePricesAndDisplay("mainnet");
+        if(walletAddress) updateOnChainBalances("mainnet").catch(()=>{});
+      } catch (err) {
+        console.error("Add token error", err);
+        alert("Failed to add token.");
+        document.getElementById("addTokenStatus").innerText = "";
+      }
+    }
+
+    // initial render
+    async function renderInitial(net){
+      await updatePricesAndDisplay(net);
+      if(walletAddress){
+        updateOnChainBalances(net).catch(()=>{});
+      }
+    }
+
+    // intervals
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      const net = mainActive ? "mainnet" : "testnet";
+      await updatePricesAndDisplay(net);
+    }, PRICE_REFRESH_MS);
+
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      if(mainActive && walletAddress){
+        await updateOnChainBalances("mainnet");
+      }
+    }, ONCHAIN_REFRESH_MS);
+
+    // network switch
+    function switchNetwork(net){
+      document.getElementById("mainBtn").classList.remove("active");
+      document.getElementById("testBtn").classList.remove("active");
+      if(net==="mainnet"){document.getElementById("mainBtn").classList.add("active");}
+      else{document.getElementById("testBtn").classList.add("active");}
+      renderInitial(net);
+    }
+
+    // wire add-token button
+    document.getElementById("addTokenBtn").addEventListener("click", onAddTokenClicked);
+
+    // expose for html inline usage or debugging
+    window.switchNetwork = switchNetwork;
+    window.onAddTokenClicked = onAddTokenClicked;
+
+    // initial
+    renderInitial("mainnet");
+  </script>
+</body>
+</html>
+
