@@ -1,363 +1,313 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>WalletConnect | Payme Crypto</title>
-  <meta name="description" content="Connect wallet via WalletConnect - Payme Crypto" />
+
+  <!-- WalletConnect provider (UMD), modal + ethers -->
+  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js"></script>
+  <script src="https://unpkg.com/@walletconnect/modal@2.6.2/dist/index.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.6.0/dist/ethers.umd.min.js"></script>
 
   <style>
-    :root{
+    :root {
       --bg: linear-gradient(180deg,#031620,#072a34);
       --text: #ecf9f2;
       --accent: #00d27a;
       --muted: #96b1ad;
-      --danger: #ff6b6b;
     }
-    html,body{
-      height:100%;
+    body {
       margin:0;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-      background:var(--bg);
-      color:var(--text);
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
-    }
-    .wrap {
       min-height:100vh;
       display:flex;
       align-items:center;
       justify-content:center;
-      padding:24px;
+      font-family: Inter, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
     }
-    .card {
-      width:100%;
-      max-width:520px;
-      background:rgba(255,255,255,0.04);
-      border-radius:14px;
-      padding:22px;
-      box-shadow: 0 10px 36px rgba(0,0,0,0.6);
+    .wrap {
       text-align:center;
-      border:1px solid rgba(255,255,255,0.02);
+      max-width:520px;
+      width:100%;
+      background:rgba(255,255,255,0.05);
+      padding:24px;
+      border-radius:16px;
+      box-shadow:0 6px 24px rgba(0,0,0,0.6);
     }
-    h1{
-      margin:0 0 10px 0;
-      color:var(--accent);
-      font-size:20px;
+    h1 {
+      font-size:22px;
+      margin-bottom:14px;
+      color: var(--accent);
     }
-    p.lead { margin:8px 0 18px 0; color:var(--muted); font-size:14px; }
-    .controls { display:flex; gap:12px; justify-content:center; align-items:center; flex-wrap:wrap; margin-top:12px; }
-    button.btn {
-      padding:12px 16px;
-      border-radius:10px;
-      border:0;
+    .btn {
+      padding:12px 18px;
+      font-size:15px;
       font-weight:700;
-      cursor:pointer;
+      border:0;
+      border-radius:10px;
       background:var(--accent);
       color:#042e21;
-      box-shadow:0 6px 18px rgba(0,0,0,0.35);
-      transition:transform .12s ease,opacity .12s ease;
+      cursor:pointer;
+      margin-top:16px;
     }
-    button.btn.secondary {
-      background:transparent;
-      color:var(--text);
-      border:1px solid rgba(255,255,255,0.06);
-      box-shadow:none;
+    #status {
+      margin-top:14px;
+      font-size:14px;
+      color:var(--muted);
+      word-break:break-word;
     }
-    button.btn:active { transform: translateY(1px); }
-    #status { margin-top:14px; color:var(--muted); font-size:13px; word-break:break-word; }
-    .info-row { margin-top:14px; display:flex; justify-content:center; gap:8px; align-items:center; flex-wrap:wrap; }
-    .pill { background:rgba(255,255,255,0.03); padding:8px 12px; border-radius:999px; font-size:13px; color:var(--muted); border:1px solid rgba(255,255,255,0.02); }
-    .addr { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; color: #cdefd6; }
-    .danger { color:var(--danger); font-weight:700; }
-    .small { font-size:12px; color:var(--muted); margin-top:8px; }
+    .small { font-size:13px; color: #9fb7ad; margin-top:6px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="card" role="main" aria-labelledby="title">
-      <h1 id="title">Connect with WalletConnect</h1>
-      <p class="lead">Use WalletConnect to connect your mobile wallet (OKX, Trust Wallet, MetaMask Mobile etc.).</p>
-
-      <div class="controls">
-        <button id="connectBtn" class="btn" type="button">Connect Wallet</button>
-        <button id="openDashboard" class="btn secondary" type="button">Open Dashboard</button>
-      </div>
-
-      <div id="status" aria-live="polite">No wallet connected</div>
-
-      <div class="info-row" id="infoRow" style="display:none;">
-        <div class="pill">Address: <span id="addr" class="addr"></span></div>
-        <div class="pill">Chain: <span id="chain"></span></div>
-        <div class="pill">Connected: <span id="connectedAt"></span></div>
-      </div>
-
-      <div class="small">Project ID is required (WalletConnect Cloud). If you change it, clear localStorage and reload.</div>
-    </div>
+    <h1>Connect with WalletConnect</h1>
+    <button id="connectBtn" class="btn">Connect Wallet</button>
+    <div id="status">No wallet connected</div>
+    <div class="small">After connecting we will fetch on-chain balances from your backend and redirect to the dashboard.</div>
   </div>
 
   <script>
   (async function(){
-    // --- Configuration ---
-    const PROJECT_ID = "48a4f7dc44d18bf848a1128ae145eb89"; // <---- your Project ID (pre-filled)
-    const CHAINS = [1, 137, 56, 43114, 42161, 10, 250]; // common EVM chain ids
-    const REDIRECT_AFTER_CONNECT = "dashboard.html"; // change only if your dashboard path differs
-
-    // Local storage keys used by your frontend
-    const LC_KEY_WC = "payme_walletconnect";
-    const LC_KEY_WALLET = "payme_wallet";
-
-    // script urls (try jsDelivr first; fallback to unpkg)
-    const SCRIPTS = [
-      { name: "ethers", urls: [
-          "https://cdn.jsdelivr.net/npm/ethers@6.6.0/dist/ethers.umd.min.js",
-          "https://unpkg.com/ethers@6.6.0/dist/ethers.umd.min.js"
-        ]
-      },
-      { name: "wcProvider", urls: [
-          "https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/umd/index.min.js",
-          "https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/umd/index.min.js"
-        ]
-      }
-    ];
-
-    // UI references
     const connectBtn = document.getElementById("connectBtn");
-    const openDashboardBtn = document.getElementById("openDashboard");
-    const statusEl = document.getElementById("status");
-    const infoRow = document.getElementById("infoRow");
-    const addrEl = document.getElementById("addr");
-    const chainEl = document.getElementById("chain");
-    const connectedAtEl = document.getElementById("connectedAt");
+    const statusEl   = document.getElementById("status");
 
-    // Helper to dynamically load a script with fallback list
-    function loadScriptWithFallback(urls){
-      return new Promise((resolve, reject) => {
-        let i = 0;
-        function tryLoad(){
-          if(i >= urls.length) return reject(new Error("All script URLs failed: " + JSON.stringify(urls)));
-          const s = document.createElement("script");
-          s.src = urls[i];
-          s.async = true;
-          s.onload = () => resolve(urls[i]);
-          s.onerror = () => {
-            i++;
-            tryLoad();
-          };
-          document.head.appendChild(s);
-        }
-        tryLoad();
-      });
+    // === CONFIG ===
+    // Your WalletConnect Project ID (you provided it earlier)
+    const PROJECT_ID = "48a4f7dc44d18bf848a1128ae145eb89";
+
+    // Backend endpoint (your Render URL)
+    const BACKEND_BASE = "https://paymecrypto-1.onrender.com";
+    const BACKEND_BALANCE_ENDPOINT = BACKEND_BASE.replace(/\/$/, "") + "/api/balance";
+
+    // map chainId (decimal) -> backend chain key
+    // extend as needed; backend expects keys like 'ethereum','bsc','polygon','avax','arbitrum','optimism','solana', etc.
+    const CHAIN_ID_TO_CHAIN_KEY = {
+      1: "ethereum",
+      56: "bsc",
+      137: "polygon",
+      43114: "avax",
+      10: "optimism",
+      42161: "arbitrum",
+      250: "fantom",
+      25: "cronos",
+      // add more if you use them
+    };
+
+    // localStorage keys
+    const LS_KEY_WC = "payme_walletconnect";
+    const LS_KEY_BACKEND_BAL = "payme_backend_balance";
+
+    // helper: show status
+    function setStatus(msg, muted=false){
+      statusEl.textContent = msg;
+      statusEl.style.color = muted ? "var(--muted)" : "";
     }
 
-    // Load required scripts sequentially and robustly
+    // init provider
+    let provider;
     try {
-      statusEl.textContent = "Loading dependencies...";
-      await loadScriptWithFallback(SCRIPTS[0].urls); // ethers
-      await loadScriptWithFallback(SCRIPTS[1].urls); // wc provider
+      if(!window.WalletConnectEthereumProvider){
+        setStatus("WalletConnect provider script failed to load. Check network/ CDN.", false);
+        console.error("WalletConnectEthereumProvider missing");
+        return;
+      }
+
+      const { EthereumProvider } = window.WalletConnectEthereumProvider;
+
+      provider = await EthereumProvider.init({
+        projectId: PROJECT_ID,
+        chains: [1, 137, 56, 43114, 10, 42161], // most common EVM chains
+        showQrModal: true,
+      });
+
+      // good
+      setStatus("Provider initialized. Click connect.", true);
     } catch(err){
-      console.error("Script load failed:", err);
-      statusEl.innerHTML = `<span class="danger">Required scripts failed to load. Check network or CDN.</span>`;
+      console.error("Provider init error:", err);
+      setStatus("Provider failed to initialize. See console for details.");
       return;
     }
 
-    // Validate global
-    if(!window.WalletConnectEthereumProvider){
-      statusEl.innerHTML = `<span class="danger">WalletConnect provider not available on window. Check script include.</span>`;
-      return;
-    }
-    if(!window.ethers){
-      statusEl.innerHTML = `<span class="danger">Ethers.js not available on window. Check script include.</span>`;
-      return;
-    }
-
-    // Provider instance
-    let provider = null;
-
-    // Lazy init provider (reusable)
-    async function initProvider(){
-      if(provider) return provider;
+    // helper: convert chain value to decimal number
+    function parseChainId(chainVal){
+      if(typeof chainVal === "number") return chainVal;
       try {
-        provider = await window.WalletConnectEthereumProvider.init({
-          projectId: PROJECT_ID,
-          chains: CHAINS,
-          showQrModal: true,
-          qrModalOptions: { themeMode: "dark" }
+        if(typeof chainVal === "string"){
+          if(chainVal.startsWith("0x")) return parseInt(chainVal, 16);
+          return parseInt(chainVal,10);
+        }
+      } catch(e){}
+      return null;
+    }
+
+    async function fetchBackendBalance(chainKey, address){
+      try {
+        setStatus("Fetching balances from backend...", true);
+        const body = {
+          chain: chainKey,
+          address: address,
+          coin_ids: [] , // optional: you can pass coin ids you want prices for
+          tokens: []     // optional explicit contracts
+        };
+        const resp = await fetch(BACKEND_BALANCE_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          credentials: "omit"
         });
-        attachProviderEvents(provider);
-        return provider;
+        if(!resp.ok){
+          const txt = await resp.text().catch(()=>"");
+          throw new Error(`Backend error ${resp.status}: ${txt}`);
+        }
+        const data = await resp.json();
+        return data;
       } catch(e){
-        console.error("initProvider failed:", e);
+        console.error("fetchBackendBalance error:", e);
         throw e;
       }
     }
 
-    // Attach common events so UI stays in sync
-    function attachProviderEvents(p){
-      try {
-        p.on && p.on("accountsChanged", (accounts) => {
-          const a = Array.isArray(accounts) ? accounts[0] : accounts;
-          statusEl.textContent = `Accounts changed: ${a || "none"}`;
-          updateConnectedInfo(a);
-          // persist address
-          if(a){
-            localStorage.setItem(LC_KEY_WC, JSON.stringify({ address: a, chainId: p.chainId || null, connectedAt: Date.now() }));
-            localStorage.setItem(LC_KEY_WALLET, JSON.stringify({ address: a }));
-          }
-        });
-
-        p.on && p.on("chainChanged", (chainId) => {
-          statusEl.textContent = `Chain changed: ${chainId}`;
-          chainEl.textContent = parseChainId(chainId);
-          // persist chain
-          const existing = JSON.parse(localStorage.getItem(LC_KEY_WC) || "null");
-          if(existing){ existing.chainId = chainId; localStorage.setItem(LC_KEY_WC, JSON.stringify(existing)); }
-        });
-
-        p.on && p.on("disconnect", (code, reason) => {
-          // provider may auto-reconnect in session; still we clear local state
-          console.info("WalletConnect disconnect", code, reason);
-          localStorage.removeItem(LC_KEY_WC);
-          localStorage.removeItem(LC_KEY_WALLET);
-          updateUIDisconnected();
-        });
-
-        p.on && p.on("connect", (info) => {
-          // info: { chainId }
-          statusEl.textContent = `Connected (chain ${info?.chainId || p.chainId || "?"})`;
-        });
-      } catch(e){
-        console.warn("Failed to attach provider events", e);
-      }
-    }
-
-    // utility to read chainId (hex or decimal)
-    function parseChainId(chainId){
-      if(!chainId) return "";
-      try {
-        // sometimes provider returns number or hex string
-        if(typeof chainId === "number") return String(chainId);
-        if(typeof chainId === "string"){
-          if(chainId.startsWith("0x")) return String(parseInt(chainId, 16));
-          return chainId;
-        }
-      } catch(e){}
-      return String(chainId);
-    }
-
-    // UI update helpers
-    function updateUIConnected(address, chainId){
-      addrEl.textContent = address || "";
-      chainEl.textContent = parseChainId(chainId);
-      connectedAtEl.textContent = new Date().toLocaleString();
-      infoRow.style.display = "flex";
-      statusEl.textContent = `Connected: ${address} (chain ${parseChainId(chainId)})`;
-      connectBtn.textContent = "Disconnect";
-    }
-    function updateUIDisconnected(){
-      addrEl.textContent = "";
-      chainEl.textContent = "";
-      connectedAtEl.textContent = "";
-      infoRow.style.display = "none";
-      statusEl.textContent = "No wallet connected";
-      connectBtn.textContent = "Connect Wallet";
-    }
-    function updateConnectedInfo(address){
-      const existing = JSON.parse(localStorage.getItem(LC_KEY_WC) || "null");
-      const chainId = existing?.chainId || null;
-      updateUIConnected(address, chainId);
-    }
-
-    // Connect flow
     async function connectWallet(){
       try {
-        statusEl.textContent = "Initializing WalletConnect...";
-        await initProvider();
-
-        // If there's already a connected session, provider.connect() resolves to that
-        statusEl.textContent = "Opening WalletConnect modal (if needed)...";
+        setStatus("Connecting to wallet…", true);
+        // open modal (provider.connect will prompt)
         await provider.connect();
 
-        // After connect, ask for accounts + chain
+        // request accounts & chain
         const accounts = await provider.request({ method: "eth_accounts" });
-        const chainId = await provider.request({ method: "eth_chainId" }).catch(()=>provider.chainId || null);
-        const address = Array.isArray(accounts) && accounts.length ? accounts[0] : (accounts || null);
+        if(!accounts || accounts.length === 0) {
+          throw new Error("No accounts returned from provider.");
+        }
+        const address = accounts[0];
 
-        if(!address){
-          statusEl.textContent = "Connected but address not found.";
-          return;
+        // chainId can be hex or decimal string, so normalize
+        let chainIdRaw;
+        try { chainIdRaw = await provider.request({ method: "eth_chainId" }); } catch(e){ chainIdRaw = null; }
+        const chainIdNum = parseChainId(chainIdRaw);
+        const chainKey = (chainIdNum && CHAIN_ID_TO_CHAIN_KEY[chainIdNum]) ? CHAIN_ID_TO_CHAIN_KEY[chainIdNum] : "ethereum";
+
+        // Save minimal wallet connect info
+        const walletData = {
+          address,
+          chainId: chainIdRaw || null,
+          chainKey,
+          connectedAt: Date.now()
+        };
+        localStorage.setItem(LS_KEY_WC, JSON.stringify(walletData));
+        setStatus(`Connected: ${address} (chain ${chainIdNum || chainIdRaw})`, true);
+
+        // call backend to fetch balances (non-blocking UX but do await so dashboard gets data)
+        let backendData = null;
+        try {
+          backendData = await fetchBackendBalance(chainKey, address);
+          localStorage.setItem(LS_KEY_BACKEND_BAL, JSON.stringify(backendData));
+          setStatus("Balances fetched. Redirecting to dashboard...", true);
+        } catch(e) {
+          // store minimal info so dashboard can still try
+          localStorage.removeItem(LS_KEY_BACKEND_BAL);
+          setStatus("Connected — backend fetch failed; opening dashboard (dashboard will retry).");
         }
 
-        // Persist both keys: payme_walletconnect (detailed) + payme_wallet (simple) so dashboard picks it
-        const payload = { address, chainId, connectedAt: Date.now() };
-        localStorage.setItem(LC_KEY_WC, JSON.stringify(payload));
-        localStorage.setItem(LC_KEY_WALLET, JSON.stringify({ address }));
-
-        updateUIConnected(address, chainId);
-
-        // short delay so user sees status; then redirect to dashboard
-        setTimeout(()=>{ try { window.location.href = REDIRECT_AFTER_CONNECT; } catch(e){} }, 900);
-
-      } catch(err){
-        console.error("connectWallet error:", err);
-        statusEl.innerHTML = `<span class="danger">Connection failed: ${err && err.message ? err.message : String(err)}</span>`;
+        // small delay then go to dashboard
+        setTimeout(()=>{ window.location.href = "dashboard.html"; }, 900);
+      } catch(e){
+        console.error("connectWallet failed:", e);
+        setStatus("Connection failed: " + (e && e.message ? e.message : e));
       }
     }
 
-    // Disconnect flow
     async function disconnectWallet(){
       try {
-        if(provider && provider.disconnect){
-          // some implementations require { code, message } but default is fine
-          await provider.disconnect();
+        setStatus("Disconnecting…", true);
+        // call provider disconnect
+        if(provider && provider.disconnect) {
+          try { await provider.disconnect(); } catch(e){ /* ignore */ }
         }
+        // clear stored data
+        localStorage.removeItem(LS_KEY_WC);
+        localStorage.removeItem(LS_KEY_BACKEND_BAL);
+        setStatus("Disconnected");
+        connectBtn.textContent = "Connect Wallet";
       } catch(e){
-        console.warn("provider.disconnect failed", e);
-      } finally {
-        localStorage.removeItem(LC_KEY_WC);
-        localStorage.removeItem(LC_KEY_WALLET);
-        updateUIDisconnected();
+        console.error("disconnect error:", e);
       }
     }
 
-    // Toggle connect/disconnect when button pressed
+    // Bind UI
     connectBtn.addEventListener("click", async ()=>{
-      // If provider not initialised, initialize
       try {
-        await initProvider();
-      } catch(e){
-        statusEl.innerHTML = `<span class="danger">Provider init failed: ${e && e.message ? e.message : e}</span>`;
-        return;
-      }
-
-      // If session is connected, disconnect; otherwise connect
-      const isConnected = provider && provider.session && provider.session.connected;
-      if(isConnected){
-        await disconnectWallet();
-      } else {
-        await connectWallet();
-      }
-    });
-
-    // "Open Dashboard" button: just redirect to dashboard page (dashboard will read localStorage)
-    openDashboardBtn.addEventListener("click", ()=>{
-      window.location.href = REDIRECT_AFTER_CONNECT;
-    });
-
-    // On load: if localStorage has a saved session, display it (but provider not yet connected)
-    (function hydrateFromLocal(){
-      try {
-        const s = JSON.parse(localStorage.getItem(LC_KEY_WC) || "null");
-        if(s && s.address){
-          addrEl.textContent = s.address;
-          chainEl.textContent = parseChainId(s.chainId);
-          connectedAtEl.textContent = s.connectedAt ? new Date(s.connectedAt).toLocaleString() : "";
-          infoRow.style.display = "flex";
-          statusEl.textContent = `Previously connected: ${s.address}`;
-          connectBtn.textContent = "Connect Wallet";
+        // If already connected: disconnect
+        // provider.session (some builds) or provider.session?.connected
+        const alreadyConnected = provider && provider.session && provider.session.connected;
+        if(alreadyConnected){
+          await disconnectWallet();
+        } else {
+          await connectWallet();
         }
-      } catch(e){}
-    })();
+      } catch(e){
+        console.error(e);
+      }
+    });
+
+    // Provider events: keep localStorage in sync
+    try {
+      provider.on && provider.on("accountsChanged", (acc) => {
+        if(acc && acc.length) {
+          setStatus("Accounts changed: " + acc[0]);
+          const raw = JSON.parse(localStorage.getItem(LS_KEY_WC) || "{}");
+          raw.address = acc[0];
+          raw.connectedAt = Date.now();
+          localStorage.setItem(LS_KEY_WC, JSON.stringify(raw));
+        }
+      });
+      provider.on && provider.on("chainChanged", async (chainVal) => {
+        const chainNum = parseChainId(chainVal);
+        const chainKey = (chainNum && CHAIN_ID_TO_CHAIN_KEY[chainNum]) ? CHAIN_ID_TO_CHAIN_KEY[chainNum] : "ethereum";
+        setStatus("Chain changed: " + (chainNum || chainVal));
+        const wcRaw = JSON.parse(localStorage.getItem(LS_KEY_WC) || "{}");
+        wcRaw.chainId = chainVal;
+        wcRaw.chainKey = chainKey;
+        localStorage.setItem(LS_KEY_WC, JSON.stringify(wcRaw));
+
+        // fetch new balances for new chain if address known
+        const addr = wcRaw.address;
+        if(addr){
+          try {
+            const bdata = await fetchBackendBalance(chainKey, addr);
+            localStorage.setItem(LS_KEY_BACKEND_BAL, JSON.stringify(bdata));
+          } catch (e) {
+            console.warn("failed to fetch balances after chain change", e);
+          }
+        }
+      });
+      provider.on && provider.on("disconnect", () => {
+        // clear state when disconnected remotely
+        localStorage.removeItem(LS_KEY_WC);
+        localStorage.removeItem(LS_KEY_BACKEND_BAL);
+        setStatus("Disconnected (remote)");
+        connectBtn.textContent = "Connect Wallet";
+      });
+    } catch(e){
+      // non-fatal
+      console.warn("provider event wiring failed", e);
+    }
+
+    // If a session already exists (e.g. user previously connected) reflect status
+    try {
+      const accountsNow = await provider.request({ method: "eth_accounts" }).catch(()=>[]);
+      if(accountsNow && accountsNow.length > 0){
+        const address = accountsNow[0];
+        const chainIdRaw = await provider.request({ method: "eth_chainId" }).catch(()=>null);
+        const chainIdNum = parseChainId(chainIdRaw);
+        const chainKey = (chainIdNum && CHAIN_ID_TO_CHAIN_KEY[chainIdNum]) ? CHAIN_ID_TO_CHAIN_KEY[chainIdNum] : "ethereum";
+        localStorage.setItem(LS_KEY_WC, JSON.stringify({ address, chainId: chainIdRaw, chainKey, connectedAt: Date.now() }));
+        setStatus("Session active: " + address, true);
+        connectBtn.textContent = "Disconnect";
+      }
+    } catch(e){ /* ignore */ }
 
   })();
   </script>
