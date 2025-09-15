@@ -61,21 +61,19 @@
   </div>
 
   <script>
-    const API_BASE = "https://paymecrypto-1.onrender.com"; // backend
+    const API_BASE = "https://paymecrypto-1.onrender.com";
     const STORAGE_WALLET = "payme_wallet";
-    const STORAGE_TOKENS = "payme_tokens";
 
     function fmt(n){ return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8}); }
 
-    // parse query param or last meta
+    // read coin from querystring or fallback
     const qs = new URLSearchParams(window.location.search);
     const coin = qs.get('coin') || null;
     const lastMeta = JSON.parse(localStorage.getItem('payme_last_token_meta') || 'null');
-
     let coinId = coin || (lastMeta && lastMeta.key) || null;
     let meta = lastMeta || { symbol: coinId ? coinId.toUpperCase() : "TOKEN", name: coinId };
 
-    // elements
+    // DOM
     const logo = document.getElementById('logo');
     const title = document.getElementById('title');
     const subtitle = document.getElementById('subtitle');
@@ -84,24 +82,21 @@
     const pctEl = document.getElementById('pct');
     const info = document.getElementById('info');
     const back = document.getElementById('back');
-
     back.addEventListener('click', ()=> window.history.back());
 
     async function fetchMarket(){
-      if(!coinId) {
+      if(!coinId){
         info.innerText = "No token selected.";
         return;
       }
-
       try {
-        // fetch markets via backend
+        // markets via backend
         const res = await fetch(`${API_BASE}/api/coins/markets?ids=${encodeURIComponent(coinId)}`);
         const arr = await res.json();
         const m = Array.isArray(arr) && arr.length ? arr[0] : null;
 
         if(m){
-          logo.src = m.image || "";
-          logo.style.display = "";
+          if(m.image){ logo.src = m.image; logo.style.display = ""; } else { logo.style.display = "none"; }
           title.innerText = (m.name || coinId);
           subtitle.innerText = `${(m.symbol||coinId).toUpperCase()} • Mainnet`;
           priceEl.innerText = `$${fmt(Number(m.current_price || 0))}`;
@@ -109,42 +104,35 @@
           pctEl.innerText = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
           pctEl.className = "pct " + (pct >= 0 ? "up" : "down");
         } else {
-          logo.style.display = 'none';
+          logo.style.display = "none";
           title.innerText = (meta.name || coinId);
           subtitle.innerText = meta.symbol ? meta.symbol.toUpperCase() : coinId;
           priceEl.innerText = `$0.00`;
           pctEl.innerText = "+0.00%";
         }
 
-        // now fetch on-chain balance via backend (uses platform detection)
+        // on-chain balance via backend
         const storedWallet = JSON.parse(localStorage.getItem(STORAGE_WALLET) || "{}");
         const address = storedWallet && storedWallet.address ? storedWallet.address : null;
         if(!address){
-          info.innerHTML = `<div>No wallet connected. Connect a wallet (import passphrase) to view on-chain balance.</div>`;
+          info.innerHTML = `<div>No wallet connected (import passphrase or connect). On-chain balance requires wallet address.</div>`;
           holdings.innerText = "0.0000";
           return;
         }
 
-        // ask backend for this coin's balance (backend will try to find contract/platform)
-        const body = {
-          chain: "ethereum",
-          address,
-          coin_ids: [coinId]
-        };
+        const body = { chain: "ethereum", address, coin_ids: [coinId] };
         const r2 = await fetch(`${API_BASE}/api/balance`, {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify(body)
         });
         const j = await r2.json();
-        // j.tokens array contains token info for coinId
         let tk = null;
         if(Array.isArray(j.tokens) && j.tokens.length){
           tk = j.tokens.find(t => t.coin_id === coinId) || j.tokens[0];
         }
         if(tk){
           holdings.innerText = `${fmt(Number(tk.balance || 0))} ${ (tk.symbol || meta.symbol || '').toUpperCase() }`;
-          // price already shown from markets; but ensure consistency
           if(tk.usd_price) priceEl.innerText = `$${fmt(Number(tk.usd_price || 0))}`;
           const pct = Number(tk.price_change_24h || 0);
           pctEl.innerText = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
@@ -163,7 +151,6 @@
         } else {
           info.innerHTML = `<div>No on-chain data returned for this token. It may be a non-EVM token or unsupported by backend.</div>`;
         }
-
       } catch(e){
         console.error(e);
         info.innerText = "Failed to load token data.";
