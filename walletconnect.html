@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WalletConnect | Payme Crypto</title>
+
+  <!-- WalletConnect v2 -->
+  <script src="https://unpkg.com/@walletconnect/modal@2.6.2/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/ethers@6.6.0/dist/ethers.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg: linear-gradient(180deg,#031620,#072a34);
+      --text: #ecf9f2;
+      --accent: #00d27a;
+      --muted: #96b1ad;
+    }
+    body {
+      margin:0;
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-family: Inter, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      text-align:center;
+      max-width:420px;
+      background:rgba(255,255,255,0.05);
+      padding:24px;
+      border-radius:16px;
+      box-shadow:0 6px 24px rgba(0,0,0,0.6);
+    }
+    h1 {
+      font-size:22px;
+      margin-bottom:14px;
+      color: var(--accent);
+    }
+    .btn {
+      padding:12px 18px;
+      font-size:15px;
+      font-weight:700;
+      border:0;
+      border-radius:10px;
+      background:var(--accent);
+      color:#042e21;
+      cursor:pointer;
+      margin-top:16px;
+    }
+    #status {
+      margin-top:14px;
+      font-size:14px;
+      color:var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Connect with WalletConnect</h1>
+    <button id="connectBtn" class="btn">Connect Wallet</button>
+    <div id="status">No wallet connected</div>
+  </div>
+
+  <script>
+    (async function(){
+      const connectBtn = document.getElementById("connectBtn");
+      const statusEl   = document.getElementById("status");
+
+      const projectId = "YOUR_REAL_PROJECT_ID"; // Replace with your WalletConnect Cloud ID
+
+      const { EthereumProvider } = window.WalletConnectEthereumProvider;
+
+      const provider = await EthereumProvider.init({
+        projectId,
+        chains: [1, 137, 56, 43114], // Ethereum, Polygon, BSC, Avalanche
+        showQrModal: true,
+      });
+
+      async function connectWallet(){
+        try {
+          await provider.connect();
+          const accounts = await provider.request({ method: "eth_accounts" });
+          const chainId  = await provider.request({ method: "eth_chainId" });
+
+          const walletData = { 
+            address: accounts[0], 
+            chainId, 
+            connectedAt: Date.now() 
+          };
+
+          localStorage.setItem("payme_walletconnect", JSON.stringify(walletData));
+
+          statusEl.textContent = `Connected: ${accounts[0]} (Chain: ${parseInt(chainId,16)})`;
+          connectBtn.textContent = "Disconnect";
+
+          // redirect
+          setTimeout(()=>{ window.location.href="dashboard.html"; }, 1200);
+
+        } catch(e){
+          console.error(e);
+          statusEl.textContent = "Connection failed: " + e.message;
+        }
+      }
+
+      async function disconnectWallet(){
+        await provider.disconnect();
+        localStorage.removeItem("payme_walletconnect");
+        statusEl.textContent = "Disconnected";
+        connectBtn.textContent = "Connect Wallet";
+      }
+
+      connectBtn.addEventListener("click", ()=>{
+        if(provider.session && provider.session.connected){
+          disconnectWallet();
+        } else {
+          connectWallet();
+        }
+      });
+
+      // 🔥 Events
+      provider.on("accountsChanged", (acc)=> {
+        statusEl.textContent = "Accounts changed: " + acc[0];
+      });
+      provider.on("chainChanged", (chain)=> {
+        statusEl.textContent = "Chain changed: " + parseInt(chain,16);
+      });
+      provider.on("disconnect", ()=> {
+        disconnectWallet();
+      });
+    })();
+  </script>
+</body>
+</html>
