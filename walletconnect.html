@@ -1,9 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WalletConnect | Payme Crypto</title>
+
+  <!-- WalletConnect v2 (Ethereum provider) -->
+  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js"></script>
+  <script src="https://unpkg.com/ethers@6.6.0/dist/ethers.umd.min.js"></script>
 
   <style>
     :root {
@@ -11,9 +15,7 @@
       --text: #ecf9f2;
       --accent: #00d27a;
       --muted: #96b1ad;
-      --card-bg: rgba(255,255,255,0.04);
     }
-    html,body { height:100%; margin:0; }
     body {
       margin:0;
       min-height:100vh;
@@ -26,23 +28,16 @@
     }
     .wrap {
       text-align:center;
-      max-width:520px;
-      width:100%;
-      background:var(--card-bg);
-      padding:26px;
-      border-radius:14px;
-      box-shadow:0 8px 40px rgba(0,0,0,0.55);
-      border: 1px solid rgba(255,255,255,0.02);
+      max-width:420px;
+      background:rgba(255,255,255,0.05);
+      padding:24px;
+      border-radius:16px;
+      box-shadow:0 6px 24px rgba(0,0,0,0.6);
     }
     h1 {
       font-size:22px;
-      margin:0 0 12px;
+      margin-bottom:14px;
       color: var(--accent);
-    }
-    p.lead {
-      margin:6px 0 18px;
-      color:var(--muted);
-      font-size:14px;
     }
     .btn {
       padding:12px 18px;
@@ -53,207 +48,208 @@
       background:var(--accent);
       color:#042e21;
       cursor:pointer;
-      margin-top:12px;
-      transition:transform .08s ease, box-shadow .08s ease;
+      margin-top:16px;
     }
-    .btn:active { transform:translateY(1px); }
     #status {
       margin-top:14px;
-      font-size:13px;
+      font-size:14px;
       color:var(--muted);
-      word-break:break-word;
+      word-break: break-all;
     }
-    .small {
+    .note {
       margin-top:10px;
       font-size:12px;
-      color:rgba(255,255,255,0.6);
+      color: #cde6d6;
     }
   </style>
 </head>
 <body>
   <div class="wrap" role="main" aria-labelledby="title">
     <h1 id="title">Connect with WalletConnect</h1>
-    <p class="lead">Use WalletConnect to link a mobile wallet (MetaMask Mobile, Trust, OKX, Rainbow, etc.).</p>
-
-    <button id="connectBtn" class="btn" aria-pressed="false">Connect Wallet</button>
-
+    <button id="connectBtn" class="btn">Connect Wallet</button>
     <div id="status">No wallet connected</div>
-    <div class="small">After connecting you will be redirected to <strong>dashboard.html</strong>.</div>
+    <div class="note">After connecting you will be redirected to the dashboard.</div>
   </div>
 
-  <!-- Use the ESM build of WalletConnect Ethereum Provider (works in modern browsers) -->
-  <script type="module">
-    // IMPORTANT: replace with your WalletConnect Cloud Project ID
-    const PROJECT_ID = "REPLACE_WITH_YOUR_PROJECT_ID";
-
-    // Save key used by your dashboard (keeps compatibility)
-    const STORAGE_KEY = "payme_walletconnect";
-
-    // Chains to support (you can add/remove chain IDs)
-    const CHAINS = [1, 137, 56, 43114, 10, 250]; // Ethereum, Polygon, BSC, Avalanche, Optimism, Fantom
-
-    // Import the ESM provider from unpkg:
-    import { EthereumProvider } from "https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/ethereum-provider.esm.min.js";
-
+  <script>
+  (async function(){
     const connectBtn = document.getElementById("connectBtn");
-    const statusEl = document.getElementById("status");
+    const statusEl   = document.getElementById("status");
 
-    let provider = null;
-    let connected = false;
+    // ✅ Your WalletConnect Cloud Project ID (provided)
+    const projectId = "48a4f7dc44d18bf848a1128ae145eb89";
 
-    // Helper: set status text
-    function setStatus(text, isError = false) {
-      statusEl.textContent = text;
-      statusEl.style.color = isError ? "#ffb3b3" : "";
+    if(!projectId || projectId.trim().length === 0){
+      statusEl.textContent = "Missing WalletConnect Project ID. Please add it to the page.";
+      connectBtn.disabled = true;
+      return;
     }
 
-    // Initialize provider instance (but do not open modal yet)
-    async function initProvider() {
-      if (provider) return provider;
+    // Ensure provider library loaded
+    if(!window.WalletConnectEthereumProvider){
+      statusEl.textContent = "WalletConnect provider failed to load. Check your network and script include.";
+      connectBtn.disabled = true;
+      return;
+    }
+
+    // Create provider instance
+    let provider;
+    try {
+      provider = await window.WalletConnectEthereumProvider.init({
+        projectId,
+        chains: [1, 137, 56, 43114], // Ethereum, Polygon, BSC, Avalanche (you can add more chain IDs)
+        showQrModal: true,
+        methods: ["eth_requestAccounts", "eth_chainId", "personal_sign", "eth_sign"],
+      });
+    } catch (err) {
+      console.error("Provider init failed", err);
+      statusEl.textContent = "Provider initialization failed: " + (err && err.message ? err.message : err);
+      connectBtn.disabled = true;
+      return;
+    }
+
+    // Helper to check connection & update UI
+    async function refreshStatus(){
       try {
-        provider = await EthereumProvider.init({
-          projectId: PROJECT_ID,
-          chains: CHAINS,
-          showQrModal: true, // show QR modal when connect() called in browsers
-          methods: ["eth_requestAccounts", "eth_chainId", "eth_accounts"],
-        });
-        // attach event handlers
-        provider.on?.("accountsChanged", (accounts) => {
-          const addr = (accounts && accounts[0]) || null;
-          setStatus(addr ? `Account changed: ${addr}` : "Accounts changed");
-          // update stored info if any
-          const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-          if (stored) {
-            stored.address = addr;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-          }
-        });
+        // eth_accounts may return [] if not connected
+        let accounts = [];
+        try { accounts = await provider.request({ method: "eth_accounts" }); } catch(e){ accounts = []; }
+        let chainId = null;
+        try { chainId = await provider.request({ method: "eth_chainId" }); } catch(e){ chainId = null; }
 
-        provider.on?.("chainChanged", (chain) => {
-          // chain is hex string e.g. '0x1'
-          try {
-            const n = typeof chain === "string" && chain.startsWith("0x") ? parseInt(chain, 16) : chain;
-            setStatus(`Chain changed: ${n}`);
-            const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-            if (stored) {
-              stored.chainId = chain;
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-            }
-          } catch(e){
-            setStatus("Chain changed", false);
-          }
-        });
-
-        provider.on?.("disconnect", (code, reason) => {
-          setStatus("Disconnected");
-          connected = false;
+        if(accounts && accounts.length > 0){
+          const address = accounts[0];
+          const displayChain = chainId ? (typeof chainId === "string" ? parseInt(chainId, 16) : chainId) : "unknown";
+          statusEl.textContent = `Connected: ${address} (Chain ${displayChain})`;
+          connectBtn.textContent = "Disconnect";
+        } else {
+          statusEl.textContent = "No wallet connected";
           connectBtn.textContent = "Connect Wallet";
-          localStorage.removeItem(STORAGE_KEY);
-        });
-
-        return provider;
-      } catch (err) {
-        console.error("initProvider failed", err);
-        setStatus("Failed to initialize WalletConnect provider. Check console.", true);
-        throw err;
+        }
+      } catch (e) {
+        console.warn("refreshStatus failed", e);
       }
     }
 
     // Connect flow
-    async function connectWallet() {
-      setStatus("Opening WalletConnect modal…");
+    async function connectWallet(){
       try {
-        const p = await initProvider();
-        // connect will open QR / deep link UI if required
-        await p.connect();
+        // provider.connect() will open modal if needed
+        await provider.connect();
 
-        // after connect, request accounts & chain
-        const accounts = await p.request({ method: "eth_accounts" }).catch(()=>[]);
-        // sometimes eth_accounts returns empty until enable/request, so try eth_requestAccounts
-        if ((!accounts || accounts.length === 0) && p.request) {
-          try { 
-            const req = await p.request({ method: "eth_requestAccounts" });
-            // eth_requestAccounts may return array directly or undefined
-            if (Array.isArray(req) && req.length > 0) {
-              accounts.splice(0, accounts.length, ...req);
-            }
-          } catch(e) {
-            // ignore
-          }
+        // prefer eth_accounts, fallback to eth_requestAccounts
+        let accounts = [];
+        try { accounts = await provider.request({ method: "eth_accounts" }); } catch(e){ accounts = []; }
+        if(!accounts || accounts.length === 0){
+          try { accounts = await provider.request({ method: "eth_requestAccounts" }); } catch(e){ accounts = []; }
         }
 
-        const chainIdHex = await p.request({ method: "eth_chainId" }).catch(()=>null);
-
-        const address = (accounts && accounts[0]) || null;
-        if (!address) {
-          setStatus("No account returned by wallet.", true);
+        if(!accounts || accounts.length === 0){
+          statusEl.textContent = "Connected but no accounts returned.";
           return;
         }
 
-        // store result for dashboard to pick up
-        const walletData = {
-          address,
-          chainId: chainIdHex || null,
-          providerType: "walletconnect",
-          connectedAt: Date.now()
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(walletData));
+        const address = accounts[0];
+        let chainId = null;
+        try { chainId = await provider.request({ method: "eth_chainId" }); } catch(e){ chainId = null; }
 
-        setStatus("Connected: " + address);
-        connected = true;
+        // Save minimal connection info for dashboard to read
+        localStorage.setItem("payme_walletconnect", JSON.stringify({
+          address,
+          chainId,
+          connectedAt: Date.now()
+        }));
+
+        // update UI & redirect
+        const displayChain = chainId ? (typeof chainId === "string" ? parseInt(chainId,16) : chainId) : "unknown";
+        statusEl.textContent = `Connected: ${address} (Chain ${displayChain})`;
         connectBtn.textContent = "Disconnect";
 
-        // redirect to dashboard after short pause
-        setTimeout(()=>{ window.location.href = "dashboard.html"; }, 800);
+        // small delay so user sees status
+        setTimeout(()=>{ window.location.href = "dashboard.html"; }, 900);
       } catch (err) {
         console.error("connectWallet error", err);
-        const message = (err && err.message) ? err.message : String(err);
-        setStatus("Connection failed: " + message, true);
+        statusEl.textContent = "Connection failed: " + (err && err.message ? err.message : err);
       }
     }
 
     // Disconnect flow
-    async function disconnectWallet() {
+    async function disconnectWallet(){
       try {
-        if (provider && provider.disconnect) {
-          await provider.disconnect();
-        } else if (provider && provider.close) {
-          await provider.close();
+        // attempt graceful disconnect
+        if(provider && provider.disconnect){
+          try { await provider.disconnect(); } catch(e){ /* ignore */ }
         }
-      } catch (e) {
-        console.warn("Provider disconnect error", e);
+        // also try close
+        if(provider && provider.close){
+          try { await provider.close(); } catch(e){ /* ignore */ }
+        }
+      } catch(e){
+        console.warn("disconnect errors", e);
+      } finally {
+        localStorage.removeItem("payme_walletconnect");
+        statusEl.textContent = "Disconnected";
+        connectBtn.textContent = "Connect Wallet";
       }
-      localStorage.removeItem(STORAGE_KEY);
-      setStatus("Disconnected");
-      connectBtn.textContent = "Connect Wallet";
-      connected = false;
     }
 
-    // Initialize button state from previous session (if any)
-    (async function initButton() {
-      const prev = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-      if (prev && prev.address) {
-        setStatus("Previously connected: " + prev.address);
-        connectBtn.textContent = "Disconnect";
-        connected = true;
-      } else {
-        setStatus("No wallet connected");
+    // Button toggles connect/disconnect
+    connectBtn.addEventListener("click", async ()=>{
+      try {
+        // Some provider builds expose session.connected; check both
+        const isConnected = !!(provider && ((provider.session && provider.session.connected) || provider.connected));
+        if(isConnected){
+          await disconnectWallet();
+        } else {
+          await connectWallet();
+        }
+      } catch(e){
+        console.error(e);
       }
-    })();
-
-    connectBtn.addEventListener("click", async () => {
-      // If already connected (by previous session), disconnect; otherwise connect
-      if (connected) {
-        await disconnectWallet();
-        return;
-      }
-      await connectWallet();
     });
 
-    // Clean up on unload (optional)
-    window.addEventListener("beforeunload", () => {
-      // nothing destructive here
-    });
+    // Attach provider events (if supported)
+    try {
+      provider.on && provider.on("accountsChanged", (accounts) => {
+        if(accounts && accounts.length > 0){
+          statusEl.textContent = "Accounts changed: " + accounts[0];
+          localStorage.setItem("payme_walletconnect", JSON.stringify({
+            address: accounts[0],
+            chainId: null,
+            connectedAt: Date.now()
+          }));
+        } else {
+          statusEl.textContent = "No accounts";
+        }
+      });
+
+      provider.on && provider.on("chainChanged", (chain) => {
+        const displayChain = (typeof chain === "string") ? parseInt(chain, 16) : chain;
+        statusEl.textContent = "Chain changed: " + displayChain;
+        // update stored chainId if present
+        try {
+          const st = JSON.parse(localStorage.getItem("payme_walletconnect") || "{}");
+          st.chainId = chain;
+          localStorage.setItem("payme_walletconnect", JSON.stringify(st));
+        } catch(e){}
+      });
+
+      provider.on && provider.on("disconnect", (code, reason) => {
+        localStorage.removeItem("payme_walletconnect");
+        statusEl.textContent = "Disconnected";
+        connectBtn.textContent = "Connect Wallet";
+      });
+    } catch(e){
+      console.warn("Event handlers attach failed", e);
+    }
+
+    // initial status check
+    await refreshStatus();
+
+    // optionally poll status every few seconds to keep UI in sync with external changes
+    setInterval(refreshStatus, 5000);
+
+  })();
   </script>
 </body>
 </html>
