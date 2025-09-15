@@ -61,7 +61,7 @@
   </div>
 
   <script>
-    const API_BASE = "https://paymecrypto-1.onrender.com"; // change if you host elsewhere
+    const API_BASE = "https://paymecrypto-1.onrender.com"; // backend
     const STORAGE_WALLET = "payme_wallet";
     const STORAGE_TOKENS = "payme_tokens";
 
@@ -92,25 +92,28 @@
         info.innerText = "No token selected.";
         return;
       }
+
       try {
         // fetch markets via backend
-        const res = await fetch(`${API_BASE}/api/coins/markets?vs_currency=usd&ids=${encodeURIComponent(coinId)}&price_change_percentage=24h`);
+        const res = await fetch(`${API_BASE}/api/coins/markets?ids=${encodeURIComponent(coinId)}`);
         const arr = await res.json();
         const m = Array.isArray(arr) && arr.length ? arr[0] : null;
 
         if(m){
           logo.src = m.image || "";
-          title.innerText = (m.name || coinId).toUpperCase();
-          subtitle.innerText = `${(m.symbol||coinId).toUpperCase()} • ${m.symbol ? "Mainnet" : ""}`;
+          logo.style.display = "";
+          title.innerText = (m.name || coinId);
+          subtitle.innerText = `${(m.symbol||coinId).toUpperCase()} • Mainnet`;
           priceEl.innerText = `$${fmt(Number(m.current_price || 0))}`;
           const pct = Number(m.price_change_percentage_24h || 0);
           pctEl.innerText = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
           pctEl.className = "pct " + (pct >= 0 ? "up" : "down");
         } else {
-          // fallback meta
           logo.style.display = 'none';
           title.innerText = (meta.name || coinId);
           subtitle.innerText = meta.symbol ? meta.symbol.toUpperCase() : coinId;
+          priceEl.innerText = `$0.00`;
+          pctEl.innerText = "+0.00%";
         }
 
         // now fetch on-chain balance via backend (uses platform detection)
@@ -121,6 +124,8 @@
           holdings.innerText = "0.0000";
           return;
         }
+
+        // ask backend for this coin's balance (backend will try to find contract/platform)
         const body = {
           chain: "ethereum",
           address,
@@ -153,10 +158,8 @@
             </div>
             <div style="margin-top:8px"><a class="remote" target="_blank" href="https://www.coingecko.com/en/coins/${encodeURIComponent(coinId)}">View on CoinGecko</a></div>
           `;
-          document.getElementById('copyAddr').addEventListener('click', ()=> {
-            navigator.clipboard && navigator.clipboard.writeText(address);
-            alert('Address copied');
-          });
+          const copyBtn = document.getElementById('copyAddr');
+          if(copyBtn){ copyBtn.addEventListener('click', ()=> { navigator.clipboard && navigator.clipboard.writeText(address); alert('Address copied'); }); }
         } else {
           info.innerHTML = `<div>No on-chain data returned for this token. It may be a non-EVM token or unsupported by backend.</div>`;
         }
