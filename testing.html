@@ -435,6 +435,7 @@
         if(!coin || !coin.id){ alert("Invalid selection."); status.innerText = ""; return; }
 
         // persist token under mainnet; keep existing balance if present
+               // persist token under mainnet; keep existing balance if present
         const stored = readStoredTokens();
         stored.mainnet = stored.mainnet || {};
         stored.mainnet[coin.id] = stored.mainnet[coin.id] || {};
@@ -446,4 +447,52 @@
 
         status.innerText = `Added ${coin.symbol.toUpperCase()}`;
         await updatePricesAndDisplay("mainnet");
-        if(wa
+        if(walletAddress) updateOnChainBalances("mainnet").catch(()=>{});
+      } catch(err){
+        console.error("Add token error", err);
+        alert("Failed to add token.");
+        document.getElementById("addTokenStatus").innerText = "";
+      }
+    }
+
+    // initial render
+    async function renderInitial(net){
+      await updatePricesAndDisplay(net);
+      if(walletAddress) updateOnChainBalances(net).catch(()=>{});
+    }
+
+    // intervals
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      const net = mainActive ? "mainnet" : "testnet";
+      await updatePricesAndDisplay(net);
+    }, PRICE_REFRESH_MS);
+
+    setInterval(async ()=>{
+      const mainActive = document.getElementById("mainBtn").classList.contains("active");
+      if(mainActive && walletAddress){
+        await updateOnChainBalances("mainnet");
+      }
+    }, ONCHAIN_REFRESH_MS);
+
+    // network switch
+    function switchNetwork(net){
+      document.getElementById("mainBtn").classList.remove("active");
+      document.getElementById("testBtn").classList.remove("active");
+      if(net==="mainnet"){document.getElementById("mainBtn").classList.add("active");}
+      else{document.getElementById("testBtn").classList.add("active");}
+      renderInitial(net);
+    }
+
+    // wire add token button
+    document.getElementById("addTokenBtn").addEventListener("click", onAddTokenClicked);
+
+    // expose globally
+    window.switchNetwork = switchNetwork;
+    window.onAddTokenClicked = onAddTokenClicked;
+
+    // kick off
+    renderInitial("mainnet");
+  </script>
+</body>
+</html>
